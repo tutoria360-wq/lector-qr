@@ -43,6 +43,10 @@
   const estadoDiv = document.getElementById('estado');
   const resultadoDiv = document.getElementById('resultado');
   let bloqueado = false;
+  let ultimoIdEscaneado = null;
+  let ultimoTimestamp = 0;
+  let scannerRef = null;
+  const COOLDOWN_MS = 6000; // tiempo mínimo antes de volver a aceptar el mismo ID
 
   function mostrarResultado(ok, texto, nombre) {
     resultadoDiv.innerHTML =
@@ -55,12 +59,22 @@
   function marcarAsistencia(idAlumno) {
     idAlumno = (idAlumno || '').trim();
     if (!idAlumno || bloqueado) return;
+
+    // Evita reenviar el mismo ID si todavía está dentro del tiempo de espera
+    // (por ejemplo, si el QR se queda varios segundos frente a la cámara).
+    const ahora = Date.now();
+    if (idAlumno === ultimoIdEscaneado && (ahora - ultimoTimestamp) < COOLDOWN_MS) return;
+    ultimoIdEscaneado = idAlumno;
+    ultimoTimestamp = ahora;
+
     bloqueado = true;
+    if (scannerRef) { try { scannerRef.pause(true); } catch (e) {} }
     estadoDiv.textContent = 'Registrando...';
 
     if (!URL_APPS_SCRIPT || URL_APPS_SCRIPT.indexOf('TU_ID_DE_IMPLEMENTACION') > -1) {
       mostrarResultado(false, 'Falta configurar la URL de Apps Script en este archivo (variable URL_APPS_SCRIPT).');
       bloqueado = false;
+      if (scannerRef) { try { scannerRef.resume(); } catch (e) {} }
       estadoDiv.textContent = 'Apunta la cámara al código QR…';
       return;
     }
@@ -71,6 +85,7 @@
       .then(data => {
         mostrarResultado(!!data.success, data.message || 'Sin respuesta del servidor.',
           data.alumno ? data.alumno.Nombre_Completo : null);
+        estadoDiv.textContent = 'Listo. Retira el código de la cámara…';
       })
       .catch(err => {
         mostrarResultado(false, 'No se pudo conectar con el servidor: ' + err.message);
@@ -78,8 +93,9 @@
       .finally(() => {
         setTimeout(() => {
           bloqueado = false;
+          if (scannerRef) { try { scannerRef.resume(); } catch (e) {} }
           estadoDiv.textContent = 'Apunta la cámara al código QR…';
-        }, 2200);
+        }, COOLDOWN_MS);
       });
   }
 
@@ -96,6 +112,7 @@
       const trasera = camaras.find(c => /back|trasera|rear|environment/i.test(c.label || ''));
       const elegida = trasera || camaras[0];
       const scanner = new Html5Qrcode('qr-reader');
+      scannerRef = scanner;
       scanner.start(
         { deviceId: { exact: elegida.id } },
         { fps: 10, qrbox: { width: 250, height: 250 } },

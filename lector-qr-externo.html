@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lector QR — Asistencia</title>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<style>
+  body { font-family: system-ui, sans-serif; margin:0; padding:16px; background:#0f172a; color:#e2e8f0; }
+  h3 { text-align:center; font-size:16px; margin:0 0 14px; }
+  #qr-reader { width:100%; max-width:420px; margin:0 auto; border-radius:12px; overflow:hidden; }
+  .estado { text-align:center; margin-top:14px; font-size:14px; color:#94a3b8; }
+  .resultado { border-radius:10px; padding:16px; font-size:15px; margin-top:14px; text-align:center; }
+  .ok { background:#052e16; color:#bbf7d0; border:1px solid #14532d; }
+  .error { background:#450a0a; color:#fecaca; border:1px solid #7f1d1d; }
+  .nombre { font-weight:700; font-size:17px; margin-bottom:4px; }
+  input, button { font-size:15px; }
+  #inputManual { width:100%; box-sizing:border-box; padding:10px; border-radius:8px; border:1px solid #334155; background:#1e293b; color:#e2e8f0; margin-top:6px; }
+  .fila { display:flex; gap:8px; margin-top:6px; }
+  .fila input { flex:1; }
+  button { padding:10px 14px; border:none; border-radius:8px; background:#334155; color:#fff; font-weight:600; cursor:pointer; }
+  button:hover { background:#475569; }
+  label { font-size:13px; color:#94a3b8; }
+</style>
+</head>
+<body>
+  <h3>📷 Lector QR — Control de Asistencia</h3>
+  <div id="qr-reader"></div>
+  <div id="estado" class="estado">Solicitando acceso a la cámara…</div>
+  <div id="resultado"></div>
+
+  <label>O ingresar ID manualmente:</label>
+  <div class="fila">
+    <input id="inputManual" placeholder="ACA-2026-0001" onkeydown="if(event.key==='Enter'){marcarAsistencia(this.value); this.value='';}">
+    <button onclick="marcarAsistencia(document.getElementById('inputManual').value); document.getElementById('inputManual').value='';">Marcar</button>
+  </div>
+
+<script>
+  // ⚠️ IMPORTANTE: reemplaza esta URL por el enlace /exec de TU implementación de Apps Script
+  // (Implementar → Administrar implementaciones → copiar la URL de la app web).
+  const URL_APPS_SCRIPT = 'https://script.google.com/macros/s/TU_ID_DE_IMPLEMENTACION/exec';
+
+  const estadoDiv = document.getElementById('estado');
+  const resultadoDiv = document.getElementById('resultado');
+  let bloqueado = false;
+
+  function mostrarResultado(ok, texto, nombre) {
+    resultadoDiv.innerHTML =
+      '<div class="resultado ' + (ok ? 'ok' : 'error') + '">' +
+      (nombre ? '<div class="nombre">' + nombre + '</div>' : '') +
+      (ok ? '✅ ' : '⚠️ ') + texto +
+      '</div>';
+  }
+
+  function marcarAsistencia(idAlumno) {
+    idAlumno = (idAlumno || '').trim();
+    if (!idAlumno || bloqueado) return;
+    bloqueado = true;
+    estadoDiv.textContent = 'Registrando...';
+
+    if (!URL_APPS_SCRIPT || URL_APPS_SCRIPT.indexOf('TU_ID_DE_IMPLEMENTACION') > -1) {
+      mostrarResultado(false, 'Falta configurar la URL de Apps Script en este archivo (variable URL_APPS_SCRIPT).');
+      bloqueado = false;
+      estadoDiv.textContent = 'Apunta la cámara al código QR…';
+      return;
+    }
+
+    const url = URL_APPS_SCRIPT + '?accion=marcarAsistencia&idAlumno=' + encodeURIComponent(idAlumno);
+    fetch(url)
+      .then(r => r.json())
+      .then(data => {
+        mostrarResultado(!!data.success, data.message || 'Sin respuesta del servidor.',
+          data.alumno ? data.alumno.Nombre_Completo : null);
+      })
+      .catch(err => {
+        mostrarResultado(false, 'No se pudo conectar con el servidor: ' + err.message);
+      })
+      .finally(() => {
+        setTimeout(() => {
+          bloqueado = false;
+          estadoDiv.textContent = 'Apunta la cámara al código QR…';
+        }, 2200);
+      });
+  }
+
+  if (typeof Html5Qrcode === 'undefined') {
+    estadoDiv.innerHTML = '<div class="resultado error">No se pudo cargar la librería del lector QR. Revisa tu conexión a internet.</div>';
+  } else if (!window.isSecureContext) {
+    estadoDiv.innerHTML = '<div class="resultado error">Esta página debe abrirse por HTTPS para poder usar la cámara.</div>';
+  } else {
+    Html5Qrcode.getCameras().then(camaras => {
+      if (!camaras || camaras.length === 0) {
+        estadoDiv.innerHTML = '<div class="resultado error">No se detectó ninguna cámara conectada.</div>';
+        return;
+      }
+      const trasera = camaras.find(c => /back|trasera|rear|environment/i.test(c.label || ''));
+      const elegida = trasera || camaras[0];
+      const scanner = new Html5Qrcode('qr-reader');
+      scanner.start(
+        { deviceId: { exact: elegida.id } },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        decodedText => marcarAsistencia(decodedText),
+        () => { /* frame sin QR, ignorar */ }
+      ).then(() => { estadoDiv.textContent = 'Apunta la cámara al código QR…'; })
+       .catch(err => {
+          const nombre = (err && err.name) || String(err);
+          let ayuda = 'No se pudo acceder a la cámara (' + nombre + ').';
+          if (nombre.indexOf('NotAllowed') > -1) ayuda += ' Revisa el permiso de cámara para este sitio en tu navegador.';
+          else if (nombre.indexOf('NotReadable') > -1) ayuda += ' La cámara está siendo usada por otra aplicación.';
+          estadoDiv.innerHTML = '<div class="resultado error">' + ayuda + '</div>';
+       });
+    }).catch(err => {
+      estadoDiv.innerHTML = '<div class="resultado error">No se pudo listar las cámaras: ' + ((err && err.message) || err) + '</div>';
+    });
+  }
+</script>
+</body>
+</html>

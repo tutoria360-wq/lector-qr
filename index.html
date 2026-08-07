@@ -21,17 +21,27 @@
   button { padding:10px 14px; border:none; border-radius:8px; background:#334155; color:#fff; font-weight:600; cursor:pointer; }
   button:hover { background:#475569; }
   label { font-size:13px; color:#94a3b8; }
+  .toggle { display:flex; gap:8px; margin:0 auto 14px; max-width:420px; }
+  .toggle button { flex:1; padding:12px; border-radius:10px; background:#1e293b; border:2px solid #334155; font-size:16px; }
+  .toggle button.activo-entrada { background:#052e16; border-color:#16a34a; color:#bbf7d0; }
+  .toggle button.activo-salida { background:#450a0a; border-color:#dc2626; color:#fecaca; }
 </style>
 </head>
 <body>
   <h3>📷 Lector QR — Control de Asistencia</h3>
+
+  <div class="toggle">
+    <button id="btnModoEntrada" onclick="elegirModo('Entrada')">⬆️ Entrada</button>
+    <button id="btnModoSalida" onclick="elegirModo('Salida')">⬇️ Salida</button>
+  </div>
+
   <div id="qr-reader"></div>
   <div id="estado" class="estado">Solicitando acceso a la cámara…</div>
   <div id="resultado"></div>
 
   <label>O ingresar ID manualmente:</label>
   <div class="fila">
-    <input id="inputManual" placeholder="ACA-2026-0001" onkeydown="if(event.key==='Enter'){marcarAsistencia(this.value); this.value='';}">
+    <input id="inputManual" placeholder="DNI del alumno" onkeydown="if(event.key==='Enter'){marcarAsistencia(this.value); this.value='';}">
     <button onclick="marcarAsistencia(document.getElementById('inputManual').value); document.getElementById('inputManual').value='';">Marcar</button>
   </div>
 
@@ -46,7 +56,16 @@
   let ultimoIdEscaneado = null;
   let ultimoTimestamp = 0;
   let scannerRef = null;
-  const COOLDOWN_MS = 6000; // tiempo mínimo antes de volver a aceptar el mismo ID
+  let modoActual = 'Entrada';
+  const COOLDOWN_MS = 8000;      // evita re-marcar al MISMO alumno antes de este tiempo
+  const RESUME_DELAY_MS = 1200;  // pausa cortita de cámara, solo para no releer el mismo frame
+
+  function elegirModo(modo) {
+    modoActual = modo;
+    document.getElementById('btnModoEntrada').className = modo === 'Entrada' ? 'activo-entrada' : '';
+    document.getElementById('btnModoSalida').className = modo === 'Salida' ? 'activo-salida' : '';
+  }
+  elegirModo('Entrada'); // modo por defecto al abrir la página
 
   function mostrarResultado(ok, texto, nombre) {
     resultadoDiv.innerHTML =
@@ -62,6 +81,8 @@
 
     // Evita reenviar el mismo ID si todavía está dentro del tiempo de espera
     // (por ejemplo, si el QR se queda varios segundos frente a la cámara).
+    // Este control es POR ALUMNO, así que no afecta a que el siguiente alumno
+    // (con un ID distinto) pueda escanear de inmediato.
     const ahora = Date.now();
     if (idAlumno === ultimoIdEscaneado && (ahora - ultimoTimestamp) < COOLDOWN_MS) return;
     ultimoIdEscaneado = idAlumno;
@@ -69,7 +90,7 @@
 
     bloqueado = true;
     if (scannerRef) { try { scannerRef.pause(true); } catch (e) {} }
-    estadoDiv.textContent = 'Registrando...';
+    estadoDiv.textContent = 'Registrando ' + modoActual + '...';
 
     if (!URL_APPS_SCRIPT || URL_APPS_SCRIPT.indexOf('TU_ID_DE_IMPLEMENTACION') > -1) {
       mostrarResultado(false, 'Falta configurar la URL de Apps Script en este archivo (variable URL_APPS_SCRIPT).');
@@ -79,23 +100,26 @@
       return;
     }
 
-    const url = URL_APPS_SCRIPT + '?accion=marcarAsistencia&idAlumno=' + encodeURIComponent(idAlumno);
+    const url = URL_APPS_SCRIPT + '?accion=marcarAsistencia&idAlumno=' + encodeURIComponent(idAlumno) +
+      '&tipoMovimiento=' + encodeURIComponent(modoActual);
     fetch(url)
       .then(r => r.json())
       .then(data => {
         mostrarResultado(!!data.success, data.message || 'Sin respuesta del servidor.',
           data.alumno ? data.alumno.Nombre_Completo : null);
-        estadoDiv.textContent = 'Listo. Retira el código de la cámara…';
       })
       .catch(err => {
         mostrarResultado(false, 'No se pudo conectar con el servidor: ' + err.message);
       })
       .finally(() => {
+        // Pausa CORTA de la cámara: solo lo necesario para que no vuelva a leer el
+        // mismo frame que sigue en cuadro. El siguiente alumno (ID distinto) puede
+        // escanear de inmediato apenas se retire el QR anterior de la cámara.
         setTimeout(() => {
           bloqueado = false;
           if (scannerRef) { try { scannerRef.resume(); } catch (e) {} }
           estadoDiv.textContent = 'Apunta la cámara al código QR…';
-        }, COOLDOWN_MS);
+        }, RESUME_DELAY_MS);
       });
   }
 

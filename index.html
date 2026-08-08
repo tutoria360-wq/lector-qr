@@ -48,7 +48,7 @@
 <script>
   // ⚠️ IMPORTANTE: reemplaza esta URL por el enlace /exec de TU implementación de Apps Script
   // (Implementar → Administrar implementaciones → copiar la URL de la app web).
-  const URL_APPS_SCRIPT = 'https://script.google.com/macros/s/AKfycbwjlrhkxtFxWDu9mVdpEt9mMZhBEDJrg04BxezTA65FCpt_7Jau_40PQXhgsgwZgNaQ/exec';
+  const URL_APPS_SCRIPT = 'PEGA_AQUI_TU_URL_/exec';
 
   const estadoDiv = document.getElementById('estado');
   const resultadoDiv = document.getElementById('resultado');
@@ -92,7 +92,7 @@
     if (scannerRef) { try { scannerRef.pause(true); } catch (e) {} }
     estadoDiv.textContent = 'Registrando ' + modoActual + '...';
 
-    if (!URL_APPS_SCRIPT || URL_APPS_SCRIPT.indexOf('TU_ID_DE_IMPLEMENTACION') > -1) {
+    if (!URL_APPS_SCRIPT || URL_APPS_SCRIPT.indexOf('PEGA_AQUI') > -1) {
       mostrarResultado(false, 'Falta configurar la URL de Apps Script en este archivo (variable URL_APPS_SCRIPT).');
       bloqueado = false;
       if (scannerRef) { try { scannerRef.resume(); } catch (e) {} }

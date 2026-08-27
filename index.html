@@ -37,6 +37,8 @@
   .toggle button { flex:1; padding:12px; border-radius:10px; background:#1e293b; border:2px solid #334155; font-size:16px; }
   .toggle button.activo-entrada { background:#052e16; border-color:#16a34a; color:#bbf7d0; }
   .toggle button.activo-salida { background:#450a0a; border-color:#dc2626; color:#fecaca; }
+  .toggle button.btn-cerrar { flex:0 0 auto; padding:12px 14px; font-size:14px; color:#94a3b8; }
+  .toggle button.btn-cerrar:hover { background:#334155; color:#fecaca; border-color:#7f1d1d; }
 </style>
 </head>
 <body>
@@ -45,6 +47,7 @@
   <div class="toggle">
     <button id="btnModoEntrada" onclick="elegirModo('Entrada')">⬆️ Entrada</button>
     <button id="btnModoSalida" onclick="elegirModo('Salida')">⬇️ Salida</button>
+    <button class="btn-cerrar" onclick="cerrarApp()" title="Cerrar la aplicación">Salir</button>
   </div>
 
   <div id="qr-reader"></div>
@@ -69,7 +72,7 @@
   let scannerRef = null;
   let modoActual = 'Entrada';
   const COOLDOWN_MS = 2000;      // evita re-marcar al MISMO alumno antes de este tiempo
-  const RESUME_DELAY_MS = 1200;  // pausa cortita de cámara, solo para no releer el mismo frame
+  const RESUME_DELAY_MS = 700;   // pausa cortita de cámara, solo para no releer el mismo frame
 
   function elegirModo(modo) {
     modoActual = modo;
@@ -77,6 +80,25 @@
     document.getElementById('btnModoSalida').className = modo === 'Salida' ? 'activo-salida' : '';
   }
   elegirModo('Entrada'); // modo por defecto al abrir la página
+
+  // Intenta cerrar la pestaña/ventana. Funciona de forma confiable cuando esta página
+  // fue abierta con window.open() desde la app principal (justo como hace el botón
+  // "Iniciar cámara"). Si se abrió como app instalada (PWA) o escribiendo la URL
+  // directo en el navegador, los navegadores bloquean el cierre por seguridad — en
+  // ese caso, se apaga la cámara igual y se avisa cómo cerrarla a mano.
+  function cerrarApp() {
+    if (scannerRef) {
+      try { scannerRef.stop(); } catch (e) {}
+    }
+    window.close();
+    setTimeout(() => {
+      // Si seguimos aquí, el navegador no permitió el cierre automático.
+      estadoDiv.innerHTML =
+        '<div class="resultado error">No se pudo cerrar automáticamente (el navegador lo bloquea en apps instaladas). ' +
+        'Cierra esta ventana con el botón atrás de tu celular, deslizando desde el selector de apps recientes, ' +
+        'o con el botón de cerrar de tu navegador.</div>';
+    }, 400);
+  }
 
   function mostrarResultado(ok, texto, nombre) {
     resultadoDiv.innerHTML =

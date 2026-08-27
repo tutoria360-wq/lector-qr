@@ -83,21 +83,36 @@
 
   // Intenta cerrar la pestaña/ventana. Funciona de forma confiable cuando esta página
   // fue abierta con window.open() desde la app principal (justo como hace el botón
-  // "Iniciar cámara"). Si se abrió como app instalada (PWA) o escribiendo la URL
-  // directo en el navegador, los navegadores bloquean el cierre por seguridad — en
-  // ese caso, se apaga la cámara igual y se avisa cómo cerrarla a mano.
+  // "Iniciar cámara") — ahí el navegador SÍ permite el cierre por script.
+  // Cuando se usa como app instalada (PWA), los navegadores bloquean por completo
+  // cualquier cierre automático por seguridad — ninguna web app puede evitar esto,
+  // sin importar el código. En ese caso, en vez de intentarlo y fallar en silencio,
+  // apagamos la cámara y mostramos una pantalla clara de que ya se puede cerrar a mano.
   function cerrarApp() {
     if (scannerRef) {
       try { scannerRef.stop(); } catch (e) {}
     }
-    window.close();
-    setTimeout(() => {
-      // Si seguimos aquí, el navegador no permitió el cierre automático.
-      estadoDiv.innerHTML =
-        '<div class="resultado error">No se pudo cerrar automáticamente (el navegador lo bloquea en apps instaladas). ' +
-        'Cierra esta ventana con el botón atrás de tu celular, deslizando desde el selector de apps recientes, ' +
-        'o con el botón de cerrar de tu navegador.</div>';
-    }, 400);
+
+    const esAppInstalada = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+    if (!esAppInstalada) {
+      window.close();
+    }
+
+    // Si seguimos aquí (el cierre automático no aplica o no funcionó), se muestra
+    // una pantalla de confirmación clara en vez de un mensaje de error pequeño.
+    setTimeout(mostrarPantallaCierre, 250);
+  }
+
+  function mostrarPantallaCierre() {
+    document.body.innerHTML =
+      '<div style="min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:24px; box-sizing:border-box;">' +
+        '<div style="font-size:52px; margin-bottom:14px;">✅</div>' +
+        '<h3 style="margin:0 0 10px; font-size:18px;">Sesión cerrada</h3>' +
+        '<p style="color:#94a3b8; font-size:14px; max-width:320px; line-height:1.5;">' +
+        'La cámara ya está apagada y no queda nada corriendo. Por seguridad, los navegadores no permiten que ninguna app cierre sola la ventana estando instalada — desliza hacia arriba desde el selector de apps recientes de tu celular para quitarla de la pantalla.' +
+        '</p>' +
+      '</div>';
   }
 
   function mostrarResultado(ok, texto, nombre) {

@@ -358,6 +358,14 @@
   // Deja que el auxiliar sepa si el escaneo entró bien o falló
   // SIN tener que leer la pantalla — esto agiliza mucho el
   // flujo real cuando hay una fila de alumnos esperando.
+  //
+  // AJUSTE DE VOLUMEN: se subió la ganancia de 0.15 a 0.9 (el
+  // máximo recomendado sin que la onda se distorsione) y se
+  // cambió el tipo de onda de 'sine' a 'square', que suena más
+  // "llena" y penetrante a volumen alto. También se alargó un
+  // poco la duración del beep de éxito para que se note más.
+  // Si aun así suena bajo, revisa el volumen de "Multimedia"
+  // del celular (no el de "Timbre") y que no esté en silencio.
   // ============================================================
 
   let audioCtx = null;
@@ -373,9 +381,9 @@
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
 
-      osc.type = 'sine';
+      osc.type = 'square'; // onda cuadrada: más "llena" y penetrante que 'sine'
       osc.frequency.value = frecuencia;
-      gain.gain.value = 0.15;
+      gain.gain.value = 0.9; // antes 0.15 — máximo recomendado sin distorsionar
 
       osc.connect(gain);
       gain.connect(audioCtx.destination);
@@ -393,11 +401,11 @@
   }
 
   function beepExito() {
-    beep(880, 120);
+    beep(880, 200); // antes 120ms
   }
 
   function beepError() {
-    beep(220, 250);
+    beep(220, 300); // antes 250ms
   }
 
 

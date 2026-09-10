@@ -40,6 +40,19 @@
     margin: 0 auto;
     border-radius: 12px;
     overflow: hidden;
+    border: 4px solid transparent; /* base para el destello de captura */
+    transition: border-color 0.05s ease-out;
+  }
+
+  /*
+   * NUEVO — destello visual INSTANTÁNEO al detectar el QR, antes
+   * de esperar la respuesta del servidor. Mismo espíritu que
+   * beepCaptura(): feedback inmediato de "sí te leí", sin
+   * depender de la latencia de red.
+   */
+  #qr-reader.destello-captura {
+    border-color: #22c55e;
+    box-shadow: 0 0 24px 4px rgba(34, 197, 94, 0.7);
   }
 
   .estado {
@@ -400,12 +413,59 @@
     }
   }
 
+  /*
+   * NUEVO — VIBRACIÓN como refuerzo adicional al sonido.
+   * Útil cuando el ambiente está ruidoso (fila de alumnos, patio,
+   * etc.) y el beep es difícil de escuchar. Si el navegador/dispositivo
+   * no soporta vibración (ej. iPhone en Safari), simplemente no hace
+   * nada — no rompe el flujo.
+   */
+  function vibrar(patron) {
+    try {
+      if (navigator.vibrate) {
+        navigator.vibrate(patron);
+      }
+    } catch (e) { /* silencioso */ }
+  }
+
   function beepExito() {
     beep(880, 200); // antes 120ms
+    vibrar(80); // vibración corta única = éxito
   }
 
   function beepError() {
     beep(220, 300); // antes 250ms
+    vibrar([80, 60, 80]); // dos vibraciones cortas = error/atención
+  }
+
+  /*
+   * NUEVO — beep INSTANTÁNEO al momento de capturar el QR,
+   * antes de esperar la respuesta del servidor. Le da feedback
+   * inmediato al auxiliar de que la cámara SÍ leyó el código,
+   * sin tener que esperar la latencia de red para escuchar algo.
+   * Tono corto y agudo para diferenciarlo del beep de éxito/error
+   * que suena después, cuando el servidor ya confirmó el registro.
+   */
+  function beepCaptura() {
+    beep(1200, 70);
+    vibrar(30); // vibración muy corta y sutil = "te leí"
+  }
+
+  /*
+   * NUEVO — enciende el borde verde del recuadro de la cámara
+   * apenas se detecta un QR nuevo (instantáneo), y lo apaga solo
+   * después de un momento. Se usa junto con beepCaptura() para
+   * dar feedback inmediato antes de que llegue la respuesta del
+   * servidor (que sigue mostrando su propio resultado final en
+   * verde/rojo dentro de "resultadoDiv", como ya funcionaba).
+   */
+  const qrReaderDiv = document.getElementById('qr-reader');
+
+  function destelloCaptura() {
+    qrReaderDiv.classList.add('destello-captura');
+    setTimeout(() => {
+      qrReaderDiv.classList.remove('destello-captura');
+    }, 350);
   }
 
 
@@ -528,6 +588,20 @@
       );
 
       return;
+    }
+
+
+    // ----------------------------------------------------------
+    // BEEP INSTANTÁNEO DE CAPTURA
+    // ----------------------------------------------------------
+    // Suena AQUÍ, justo después de confirmar que es una lectura
+    // nueva (no un duplicado del mismo QR ni un reintento), y
+    // ANTES de esperar la respuesta del servidor. Así el auxiliar
+    // escucha algo de inmediato al pasar el QR frente a la cámara,
+    // sin depender de la latencia de la red.
+    if (!esReintento) {
+      beepCaptura();
+      destelloCaptura();
     }
 
 

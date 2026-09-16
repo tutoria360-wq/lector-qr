@@ -45,14 +45,23 @@
   }
 
   /*
-   * NUEVO — destello visual INSTANTÁNEO al detectar el QR, antes
-   * de esperar la respuesta del servidor. Mismo espíritu que
-   * beepCaptura(): feedback inmediato de "sí te leí", sin
-   * depender de la latencia de red.
+   * Destello visual INSTANTÁNEO al detectar el QR, antes de esperar la
+   * respuesta del servidor. Mismo espíritu que beepCaptura(): feedback
+   * inmediato de "sí te leí", sin depender de la latencia de red.
    */
   #qr-reader.destello-captura {
     border-color: #22c55e;
     box-shadow: 0 0 24px 4px rgba(34, 197, 94, 0.7);
+  }
+
+  /*
+   * NUEVO — destello ámbar para el caso "duplicado / ya en vuelo": distinto
+   * del verde (captura nueva) para que el auxiliar pueda diferenciar de un
+   * vistazo por qué no hubo un beep de éxito normal.
+   */
+  #qr-reader.destello-duplicado {
+    border-color: #f59e0b;
+    box-shadow: 0 0 24px 4px rgba(245, 158, 11, 0.7);
   }
 
   .estado {
@@ -90,10 +99,32 @@
     border: 1px solid #7f1d1d;
   }
 
+  /*
+   * NUEVO — estilo de alerta para "duplicado / ya en vuelo". Distinto de
+   * ok (verde) y error (rojo) para que el auxiliar entienda de un vistazo
+   * que NO es un error real del servidor, sino que ese QR ya se está
+   * procesando o se acaba de leer hace un instante.
+   */
+  .duplicado {
+    background: #451a03;
+    color: #fde68a;
+    border: 1px solid #92400e;
+  }
+
   .nombre {
     font-weight: 700;
     font-size: 17px;
     margin-bottom: 4px;
+  }
+
+  /*
+   * NUEVO — línea para mostrar el estado del SMS junto con la confirmación
+   * de asistencia (campo "smsEstado" que ahora devuelve registrarAsistencia).
+   */
+  .sms-linea {
+    margin-top: 8px;
+    font-size: 12px;
+    opacity: 0.85;
   }
 
   input,
@@ -297,18 +328,16 @@
 
 
   /*
-   * NUEVO — IDs que tienen una petición EN VUELO (todavía
-   * esperando respuesta de Apps Script).
+   * IDs que tienen una petición EN VUELO (todavía esperando respuesta de
+   * Apps Script).
    *
-   * Antes, si el servidor tardaba más de los 2 segundos del
-   * cooldown, el mismo QR podía reenviarse mientras la primera
-   * petición seguía procesándose, generando una petición
-   * duplicada — esto sumaba carga extra al candado del servidor
-   * (haciendo que TODO se sintiera más lento) y en el peor caso
-   * podía producir un doble registro. Ahora, mientras un ID
-   * tenga una petición en vuelo, un nuevo escaneo del mismo QR
-   * se ignora por completo hasta que la primera termine
-   * (éxito, error, o timeout).
+   * Antes, si el servidor tardaba más de los 2 segundos del cooldown, el
+   * mismo QR podía reenviarse mientras la primera petición seguía
+   * procesándose, generando una petición duplicada. Ahora, mientras un ID
+   * tenga una petición en vuelo, un nuevo escaneo del mismo QR se ignora
+   * por completo hasta que la primera termine (éxito, error, o timeout) —
+   * y además se le avisa AL INSTANTE al auxiliar con una alerta ámbar
+   * (ver mostrarAlertaDuplicado), en vez de quedarse en silencio.
    */
   const enVuelo = new Set();
 
@@ -414,11 +443,10 @@
   }
 
   /*
-   * NUEVO — VIBRACIÓN como refuerzo adicional al sonido.
-   * Útil cuando el ambiente está ruidoso (fila de alumnos, patio,
-   * etc.) y el beep es difícil de escuchar. Si el navegador/dispositivo
-   * no soporta vibración (ej. iPhone en Safari), simplemente no hace
-   * nada — no rompe el flujo.
+   * VIBRACIÓN como refuerzo adicional al sonido. Útil cuando el ambiente
+   * está ruidoso (fila de alumnos, patio, etc.) y el beep es difícil de
+   * escuchar. Si el navegador/dispositivo no soporta vibración (ej.
+   * iPhone en Safari), simplemente no hace nada — no rompe el flujo.
    */
   function vibrar(patron) {
     try {
@@ -429,22 +457,22 @@
   }
 
   function beepExito() {
-    beep(880, 200); // antes 120ms
+    beep(880, 200);
     vibrar(80); // vibración corta única = éxito
   }
 
   function beepError() {
-    beep(220, 300); // antes 250ms
+    beep(220, 300);
     vibrar([80, 60, 80]); // dos vibraciones cortas = error/atención
   }
 
   /*
-   * NUEVO — beep INSTANTÁNEO al momento de capturar el QR,
-   * antes de esperar la respuesta del servidor. Le da feedback
-   * inmediato al auxiliar de que la cámara SÍ leyó el código,
-   * sin tener que esperar la latencia de red para escuchar algo.
-   * Tono corto y agudo para diferenciarlo del beep de éxito/error
-   * que suena después, cuando el servidor ya confirmó el registro.
+   * beep INSTANTÁNEO al momento de capturar el QR, antes de esperar la
+   * respuesta del servidor. Le da feedback inmediato al auxiliar de que
+   * la cámara SÍ leyó el código, sin tener que esperar la latencia de red
+   * para escuchar algo. Tono corto y agudo para diferenciarlo del beep de
+   * éxito/error que suena después, cuando el servidor ya confirmó el
+   * registro.
    */
   function beepCaptura() {
     beep(1200, 70);
@@ -452,12 +480,23 @@
   }
 
   /*
-   * NUEVO — enciende el borde verde del recuadro de la cámara
-   * apenas se detecta un QR nuevo (instantáneo), y lo apaga solo
-   * después de un momento. Se usa junto con beepCaptura() para
-   * dar feedback inmediato antes de que llegue la respuesta del
-   * servidor (que sigue mostrando su propio resultado final en
-   * verde/rojo dentro de "resultadoDiv", como ya funcionaba).
+   * NUEVO — beep de duplicado: distinto de éxito (agudo, 880Hz) y de
+   * error (grave y largo, 220Hz/300ms). Un tono medio y corto, con doble
+   * vibración suave, para que el auxiliar reconozca "este QR ya se está
+   * procesando" sin tener que mirar la pantalla.
+   */
+  function beepDuplicado() {
+    beep(500, 150);
+    vibrar([40, 40, 40]);
+  }
+
+  /*
+   * enciende el borde verde del recuadro de la cámara apenas se detecta
+   * un QR nuevo (instantáneo), y lo apaga solo después de un momento. Se
+   * usa junto con beepCaptura() para dar feedback inmediato antes de que
+   * llegue la respuesta del servidor (que sigue mostrando su propio
+   * resultado final en verde/rojo dentro de "resultadoDiv", como ya
+   * funcionaba).
    */
   const qrReaderDiv = document.getElementById('qr-reader');
 
@@ -466,6 +505,32 @@
     setTimeout(() => {
       qrReaderDiv.classList.remove('destello-captura');
     }, 350);
+  }
+
+  /*
+   * NUEVO — destello ámbar para el caso duplicado/en vuelo, distinto del
+   * verde de captura nueva.
+   */
+  function destelloDuplicado() {
+    qrReaderDiv.classList.add('destello-duplicado');
+    setTimeout(() => {
+      qrReaderDiv.classList.remove('destello-duplicado');
+    }, 350);
+  }
+
+  /*
+   * NUEVO — alerta INSTANTÁNEA de duplicado. Se dispara 100% del lado del
+   * cliente (sin llamar al servidor), así que aparece de inmediato, igual
+   * que el beep de captura. Se usa en los dos casos en que antes el
+   * escaneo se ignoraba en silencio: (a) ya hay una petición en vuelo
+   * para este mismo ID, o (b) el mismo ID se escaneó hace menos de
+   * COOLDOWN_MS.
+   */
+  function mostrarAlertaDuplicado() {
+    resultadoDiv.innerHTML =
+      '<div class="resultado duplicado">⏳ Ya se está procesando este código, espera un momento.</div>';
+    beepDuplicado();
+    destelloDuplicado();
   }
 
 
@@ -489,8 +554,14 @@
   // ============================================================
   // MOSTRAR RESULTADO
   // ============================================================
+  //
+  // NUEVO parámetro "smsEstado": si el backend lo envía (campo
+  // "smsEstado" en la respuesta de registrarAsistencia), se muestra como
+  // una línea aparte debajo del mensaje principal, junto con la misma
+  // confirmación verde/roja — sin esperar a una segunda respuesta.
+  // ============================================================
 
-  function mostrarResultado(ok, texto, nombre) {
+  function mostrarResultado(ok, texto, nombre, smsEstado) {
 
     resultadoDiv.innerHTML =
 
@@ -507,6 +578,10 @@
       (ok ? '✅ ' : '⚠️ ') +
 
       texto +
+
+      (smsEstado
+        ? '<div class="sms-linea">📩 ' + smsEstado + '</div>'
+        : '') +
 
       '</div>';
 
@@ -544,17 +619,23 @@
 
     // ----------------------------------------------------------
     // EVITAR REENVÍO MIENTRAS YA HAY UNA PETICIÓN EN VUELO
-    // PARA ESTE MISMO ID (nuevo — ver comentario arriba en
-    // la declaración de "enVuelo").
+    // PARA ESTE MISMO ID.
+    //
+    // NUEVO: en vez de ignorar en silencio, se muestra una alerta
+    // instantánea (sin tocar el servidor) para que el auxiliar sepa
+    // de inmediato por qué no pasó nada nuevo.
     // ----------------------------------------------------------
 
     if (!esReintento && enVuelo.has(idAlumno)) {
+      mostrarAlertaDuplicado();
       return;
     }
 
 
     // ----------------------------------------------------------
     // EVITAR REPETICIÓN DEL MISMO QR (cooldown post-éxito/error)
+    //
+    // NUEVO: mismo tratamiento — alerta instantánea en vez de silencio.
     // ----------------------------------------------------------
 
     const ahora = Date.now();
@@ -568,6 +649,7 @@
       ahora - ultimoTiempo < COOLDOWN_MS
     ) {
 
+      mostrarAlertaDuplicado();
       return;
 
     }
@@ -695,7 +777,9 @@
 
           data.alumno
             ? data.alumno.Nombre_Completo
-            : null
+            : null,
+
+          data.smsEstado || null // ← NUEVO: estado del SMS, junto con la confirmación
 
         );
 

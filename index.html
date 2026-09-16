@@ -40,6 +40,23 @@
     margin: 0 auto;
     border-radius: 12px;
     overflow: hidden;
+    border: 4px solid transparent;
+    transition: border-color 0.05s ease-out;
+  }
+
+  /*
+   * Destello del recuadro de la cámara, SINCRONIZADO con la confirmación
+   * final (mensaje + sonido) — no con la simple detección del QR. Verde
+   * para éxito, rojo para error, igual que los colores de "resultado".
+   */
+  #qr-reader.destello-exito {
+    border-color: #22c55e;
+    box-shadow: 0 0 24px 4px rgba(34, 197, 94, 0.7);
+  }
+
+  #qr-reader.destello-error {
+    border-color: #ef4444;
+    box-shadow: 0 0 24px 4px rgba(239, 68, 68, 0.7);
   }
 
   .estado {
@@ -258,7 +275,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-09-16-sin-beep-instantaneo
+  v2026-09-16-destello-sincronizado
 </p>
 
 <script>
@@ -450,21 +467,38 @@
   }
 
   /*
-   * CAMBIO — ya NO hay beep/destello instantáneo de "captura" separado.
-   * Antes sonaba un beep agudo apenas la cámara detectaba el QR, y recién
-   * después (cuando el servidor respondía) sonaba el beep de éxito/error
-   * junto con el mensaje — esto hacía que el auxiliar escuchara DOS
-   * sonidos separados por varios segundos, dando la sensación de demora.
-   * Ahora el ÚNICO sonido es beepExito()/beepError(), y suena EXACTAMENTE
-   * junto con el mensaje de confirmación (ver mostrarResultado más abajo).
-   *
-   * El recuadro de la cámara ya no destella al detectar el QR; solo queda
-   * el texto "Enviando…" / "X registros procesándose…" como indicador
-   * silencioso de que algo está en curso.
+   * Ya NO hay beep/destello instantáneo de "captura" (al detectar el QR,
+   * antes de esperar la respuesta del servidor) — eso generaba DOS
+   * señales separadas por varios segundos (una al detectar, otra al
+   * confirmar), dando sensación de demora. El ÚNICO sonido y destello
+   * ahora es el de la confirmación FINAL (beepExito/beepError +
+   * destelloExito/destelloError), disparados juntos desde
+   * mostrarResultado() cuando llega la respuesta del servidor.
    */
 
   /*
-   * CAMBIO — los reintentos del MISMO QR mientras ya se está procesando
+   * Destello del recuadro de la cámara, sincronizado con la confirmación
+   * final — se llama desde mostrarResultado(), al mismo tiempo que suena
+   * el beep y aparece el mensaje. Verde para éxito, rojo para error.
+   */
+  const qrReaderDiv = document.getElementById('qr-reader');
+
+  function destelloExito() {
+    qrReaderDiv.classList.add('destello-exito');
+    setTimeout(() => {
+      qrReaderDiv.classList.remove('destello-exito');
+    }, 400);
+  }
+
+  function destelloError() {
+    qrReaderDiv.classList.add('destello-error');
+    setTimeout(() => {
+      qrReaderDiv.classList.remove('destello-error');
+    }, 400);
+  }
+
+  /*
+   * Los reintentos del MISMO QR mientras ya se está procesando
    * (la cámara lo sigue viendo mientras el alumno todavía está parado
    * frente a ella) o dentro del cooldown post-registro son ESPERADOS y
    * NORMALES — no un problema. Antes se mostraba una alerta ("Ya se está
@@ -533,8 +567,10 @@
 
     if (ok) {
       beepExito();
+      destelloExito();
     } else {
       beepError();
+      destelloError();
     }
   }
 

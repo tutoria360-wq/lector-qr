@@ -275,7 +275,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-09-16-reintento-candado
+  v2026-09-16-cola-idempotencia
 </p>
 
 <script>
@@ -306,50 +306,87 @@
   let modoActual = 'Entrada';
 
   /*
-   * Guarda los últimos alumnos procesados CON ÉXITO.
+   * ============================================================
+   * ESTADO DE SOLICITUDES — REDISEÑO COMPLETO (ver análisis del problema)
+   * ============================================================
    *
-   * Esto evita que la cámara lea el mismo QR
-   * muchas veces mientras todavía está frente a ella,
-   * generando registros duplicados de asistencia.
+   * enProceso: Map<idAlumno, entrada> donde "entrada" es un objeto único
+   * { requestId, intentos } creado UNA vez por intento de escaneo lógico
+   * (incluyendo todos sus reintentos automáticos, que reutilizan el MISMO
+   * objeto "entrada" y el MISMO requestId — nunca se genera uno nuevo para
+   * un reintento).
+   *
+   * Por qué esto es seguro (a diferencia de un Set simple):
+   * - Mientras enProceso.has(idAlumno) sea true, NINGÚN escaneo nuevo del
+   *   mismo alumno puede crear una segunda entrada — así que nunca puede
+   *   existir más de UN objeto "entrada" activo por alumno a la vez.
+   * - Al finalizar (éxito o error definitivo), solo se borra la entrada del
+   *   mapa si la que sigue ahí es EXACTAMENTE el mismo objeto que se está
+   *   finalizando (comparación por referencia con ===, no por valor). Como
+   *   solo puede existir un objeto a la vez por alumno, esto es una
+   *   garantía estructural, no una casualidad de temporización: una
+   *   solicitud vieja JAMÁS puede borrar la protección de una más nueva.
+   *
+   * requestId: identificador único de idempotencia enviado al servidor.
+   * El backend (Código.gs) lo usa para detectar si esta misma solicitud
+   * YA se procesó en un intento anterior (por ejemplo, si el navegador
+   * perdió la respuesta por un timeout pero Apps Script sí completó el
+   * registro) y evita escribir la fila dos veces. Esto es lo que elimina
+   * el riesgo real de duplicados por reintento, no solo la protección del
+   * lado del cliente.
+   */
+  const enProceso = new Map();
+
+  /*
+   * Cooldown POST-completado: evita que el mismo QR, todavía visible frente
+   * a la cámara justo después de completarse su registro, dispare un
+   * segundo intento inmediato.
    */
   const alumnosRecientes = new Map();
-
-
-  /*
-   * Tiempo de protección del mismo QR DESPUÉS de que ya se
-   * completó su petición (éxito o error definitivo).
-   *
-   * 2000 = 2 segundos.
-   *
-   * Un alumno diferente puede escanearse inmediatamente.
-   */
   const COOLDOWN_MS = 2000;
 
-
   /*
-   * IDs que tienen una petición EN VUELO (todavía esperando respuesta de
-   * Apps Script).
+   * COLA CON CONCURRENCIA LIMITADA A 2.
    *
-   * Antes, si el servidor tardaba más de los 2 segundos del cooldown, el
-   * mismo QR podía reenviarse mientras la primera petición seguía
-   * procesándose, generando una petición duplicada. Ahora, mientras un ID
-   * tenga una petición en vuelo, un nuevo escaneo del mismo QR se ignora
-   * EN SILENCIO por completo hasta que la primera termine (éxito, error,
-   * o timeout) — sin sonido ni mensaje, porque esto es normal (la cámara
-   * sigue viendo el mismo QR mientras el alumno está parado frente a
-   * ella) y no debe sentirse como una alerta de problema.
+   * Por qué 2 y no "todos a la vez" ni "de a uno":
+   * El candado (LockService) del lado del servidor serializa la escritura
+   * de todos modos — mandar 10 peticiones a la vez no aumenta el
+   * throughput real (solo una escribe por vez), pero SÍ satura la cola del
+   * candado y puede agotar el tiempo de espera de las últimas en llegar
+   * (el error "otro proceso ha retenido el bloqueo..."). Con concurrencia
+   * = 2: mientras una solicitud tiene el candado tomado escribiendo, la
+   * otra puede estar haciendo su validación previa (buscar al alumno,
+   * revisar vigencia — esto NO requiere candado del lado del servidor),
+   * así el candado casi nunca queda "frío" esperando a que llegue la
+   * siguiente solicitud, sin bombardear el backend con peticiones que de
+   * todos modos tendrían que esperar en fila.
    */
-  const enVuelo = new Set();
-
+  const MAX_CONCURRENCIA = 2;
+  const colaEspera = [];
+  let solicitudesActivas = 0;
 
   /*
-   * Tiempo máximo que esperamos la respuesta de Apps Script
-   * antes de darla por perdida y permitir reintentar. Sin esto,
-   * si el servidor se cuelga, la petición podía quedar esperando
-   * indefinidamente sin dar ningún feedback al auxiliar — dando
-   * la sensación de que el lector "se pausó".
+   * Máximo de intentos por escaneo (1 inicial + 1 reintento automático).
+   * Solo se reintenta ante: timeout de red, error de conexión, o el error
+   * específico de candado ocupado del servidor — NUNCA ante un resultado
+   * de negocio definitivo (vencido, retirado, no registrado, muy reciente),
+   * porque reintentar esos no cambia nada y solo desperdicia un turno de
+   * concurrencia.
    */
-  const TIMEOUT_MS = 10000;
+  const MAX_INTENTOS = 2;
+
+  /*
+   * TIMEOUT_MS — calibrado, no "aumentado a lo loco":
+   * El candado del servidor espera hasta 8 segundos (ver Código.gs). Un
+   * timeout del cliente más corto que eso (los 10s originales) puede
+   * disparar un "falso" timeout justo cuando el servidor está a punto de
+   * responder. 12 segundos da margen (8s de candado + ~4s de red/ejecución)
+   * sin sentirse como una espera excesiva. Y gracias al requestId de
+   * idempotencia, un reintento causado por este timeout YA NO puede crear
+   * un duplicado aunque el servidor sí haya completado el registro
+   * original después de que el cliente dejó de esperar.
+   */
+  const TIMEOUT_MS = 12000;
 
 
   // ============================================================
@@ -498,20 +535,14 @@
   }
 
   /*
-   * Los reintentos del MISMO QR mientras ya se está procesando
-   * (la cámara lo sigue viendo mientras el alumno todavía está parado
-   * frente a ella) o dentro del cooldown post-registro son ESPERADOS y
-   * NORMALES — no un problema. Antes se mostraba una alerta ("Ya se está
-   * procesando…") con su propio sonido cada vez que esto pasaba, lo cual
-   * en la práctica aparecía todo el tiempo (la cámara lee ~10 veces por
-   * segundo) y resultaba molesto/confuso. Ahora esos casos se IGNORAN EN
-   * SILENCIO: no hay sonido, no hay destello, no hay mensaje. El único
+   * Los reintentos del MISMO QR mientras ya se está procesando (la cámara
+   * lo sigue viendo mientras el alumno todavía está parado frente a ella)
+   * o dentro del cooldown post-registro son ESPERADOS y NORMALES — no un
+   * problema. Se ignoran en silencio dentro de marcarAsistencia() (ver más
+   * abajo): no hay sonido, no hay destello, no hay mensaje. El único
    * indicador que sigue activo es el contador discreto "procesándose…"
    * debajo de la cámara.
    */
-  function ignorarEscaneoRepetido_() {
-    // Intencionalmente sin sonido ni mensaje — ver comentario arriba.
-  }
 
 
   // ============================================================
@@ -520,13 +551,15 @@
 
   function actualizarContadorPendientes() {
 
-    if (enVuelo.size === 0) {
+    const total = enProceso.size;
+
+    if (total === 0) {
       pendientesDiv.textContent = '';
     } else {
       pendientesDiv.textContent =
-        enVuelo.size === 1
+        total === 1
           ? '1 registro procesándose…'
-          : enVuelo.size + ' registros procesándose…';
+          : total + ' registros procesándose…';
     }
   }
 
@@ -576,277 +609,171 @@
 
 
   // ============================================================
-  // MARCAR ASISTENCIA
-  // ============================================================
-  //
-  // IMPORTANTE:
-  //
-  // ESTA VERSIÓN NO PAUSA LA CÁMARA.
-  //
-  // El QR se detecta y la solicitud se envía a Apps Script
-  // en segundo plano.
-  //
-  // Mientras Apps Script responde, la cámara sigue funcionando.
-  //
+  // MARCAR ASISTENCIA — PUNTO DE ENTRADA (llamado por la cámara y por el
+  // input manual). Ya NO envía la solicitud directamente: la encola, y es
+  // la cola (procesarCola) la que respeta el límite de concurrencia.
   // ============================================================
 
-  function marcarAsistencia(idAlumno, esReintento) {
+  function marcarAsistencia(idAlumnoRaw) {
 
-    idAlumno = (idAlumno || '').trim();
+    const idAlumno = (idAlumnoRaw || '').trim();
+    if (!idAlumno) return;
 
-    if (!idAlumno) {
-      return;
-    }
-
-
-    // ----------------------------------------------------------
-    // EVITAR REENVÍO MIENTRAS YA HAY UNA PETICIÓN EN VUELO
-    // PARA ESTE MISMO ID.
-    //
-    // NUEVO: en vez de ignorar en silencio, se muestra una alerta
-    // instantánea (sin tocar el servidor) para que el auxiliar sepa
-    // de inmediato por qué no pasó nada nuevo.
-    // ----------------------------------------------------------
-
-    if (!esReintento && enVuelo.has(idAlumno)) {
-      ignorarEscaneoRepetido_();
-      return;
-    }
-
-
-    // ----------------------------------------------------------
-    // EVITAR REPETICIÓN DEL MISMO QR (cooldown post-éxito/error)
-    //
-    // NUEVO: mismo tratamiento — alerta instantánea en vez de silencio.
-    // ----------------------------------------------------------
-
+    // ---- Duplicado por cooldown post-completado: ignorar en silencio ----
     const ahora = Date.now();
-
-    const ultimoTiempo =
-      alumnosRecientes.get(idAlumno) || 0;
-
-
-    if (
-      !esReintento &&
-      ahora - ultimoTiempo < COOLDOWN_MS
-    ) {
-
-      ignorarEscaneoRepetido_();
+    if (ahora - (alumnosRecientes.get(idAlumno) || 0) < COOLDOWN_MS) {
       return;
-
     }
 
-
-    // ----------------------------------------------------------
-    // COMPROBAR URL
-    // ----------------------------------------------------------
+    // ---- Ya hay un intento en curso para este alumno: ignorar en silencio ----
+    // (cubre tanto el primer intento como cualquiera de sus reintentos
+    // automáticos, porque todos comparten la MISMA entrada en el mapa)
+    if (enProceso.has(idAlumno)) {
+      return;
+    }
 
     if (
       !URL_APPS_SCRIPT ||
       URL_APPS_SCRIPT.indexOf('PEGA_AQUI') > -1
     ) {
-
-      mostrarResultado(
-        false,
-        'Falta configurar la URL de Apps Script.'
-      );
-
+      mostrarResultado(false, 'Falta configurar la URL de Apps Script.');
       return;
     }
 
-
-    // ----------------------------------------------------------
-    // MARCAR COMO "EN VUELO"
-    // ----------------------------------------------------------
-
-    enVuelo.add(idAlumno);
+    // ---- Reservar el turno de este alumno INMEDIATAMENTE ----
+    // Se reserva ahora (aunque la solicitud real recién se envíe cuando le
+    // toque turno en la cola) para que, si la cámara sigue viendo el mismo
+    // QR mientras espera en cola, no se generen entradas repetidas.
+    const requestId = idAlumno + '_' + ahora + '_' + Math.random().toString(36).slice(2, 8);
+    const entrada = { requestId: requestId, intentos: 0 };
+    enProceso.set(idAlumno, entrada);
     actualizarContadorPendientes();
 
-
-    // ----------------------------------------------------------
-    // ESTADO
-    // ----------------------------------------------------------
-
-    estadoDiv.textContent =
-      'Enviando ' +
-      modoActual +
-      '…';
+    colaEspera.push({ idAlumno: idAlumno, entrada: entrada });
+    procesarCola();
+  }
 
 
-    // ----------------------------------------------------------
-    // CONSTRUIR URL
-    // ----------------------------------------------------------
+  // ============================================================
+  // COLA DE CONCURRENCIA LIMITADA
+  // ============================================================
+
+  function procesarCola() {
+    while (solicitudesActivas < MAX_CONCURRENCIA && colaEspera.length > 0) {
+      const item = colaEspera.shift();
+      solicitudesActivas++;
+
+      ejecutarConReintentos(item.idAlumno, item.entrada)
+        .then(() => {
+          finalizarSolicitud(item.idAlumno, item.entrada);
+        })
+        .finally(() => {
+          solicitudesActivas--;
+          procesarCola(); // libera el turno para el siguiente en espera
+        });
+    }
+  }
+
+  /**
+   * Cierra el ciclo de vida de un intento (éxito o error definitivo tras
+   * agotar los reintentos). Solo borra la entrada del mapa si la que sigue
+   * activa ahí es EXACTAMENTE este mismo objeto — comparación por
+   * referencia (===), no por valor. Como nunca puede existir más de una
+   * entrada activa por alumno a la vez (ver marcarAsistencia), esto
+   * garantiza que una solicitud vieja jamás borre la protección de una
+   * más nueva.
+   */
+  function finalizarSolicitud(idAlumno, entrada) {
+    if (enProceso.get(idAlumno) === entrada) {
+      enProceso.delete(idAlumno);
+    }
+    alumnosRecientes.set(idAlumno, Date.now());
+    actualizarContadorPendientes();
+    estadoDiv.textContent = 'Apunta la cámara al código QR…';
+  }
+
+
+  // ============================================================
+  // ENVÍO CON REINTENTOS CLASIFICADOS
+  // ============================================================
+  //
+  // Reintenta (mismo requestId, mismo objeto "entrada") SOLO ante:
+  //  - timeout de red (AbortError)
+  //  - error de conexión (fetch rechaza la promesa)
+  //  - error específico de candado ocupado devuelto por el servidor
+  //    (success:false + mensaje que menciona "tiempo de espera"/"bloqueo")
+  //
+  // NUNCA reintenta ante un resultado de negocio definitivo (vencido,
+  // retirado, no registrado, muy reciente, o cualquier success:true) —
+  // esos ya son la respuesta final, reintentarlos no cambia nada.
+  //
+  // Gracias al requestId de idempotencia (ver Código.gs), aunque este
+  // reintento ocurra porque el cliente perdió la respuesta original y el
+  // servidor SÍ la completó, el backend detecta la repetición y devuelve
+  // el mismo resultado sin duplicar la escritura.
+  // ============================================================
+
+  function ejecutarConReintentos(idAlumno, entrada) {
+
+    entrada.intentos++;
+
+    estadoDiv.textContent = 'Enviando ' + modoActual + '…';
 
     const url =
-
       URL_APPS_SCRIPT +
-
       '?accion=marcarAsistencia' +
-
-      '&idAlumno=' +
-      encodeURIComponent(idAlumno) +
-
-      '&tipoMovimiento=' +
-      encodeURIComponent(modoActual);
-
-
-    // ----------------------------------------------------------
-    // TIMEOUT — evita que una petición colgada deje al auxiliar
-    // sin feedback indefinidamente.
-    // ----------------------------------------------------------
+      '&idAlumno=' + encodeURIComponent(idAlumno) +
+      '&tipoMovimiento=' + encodeURIComponent(modoActual) +
+      '&requestId=' + encodeURIComponent(entrada.requestId);
 
     const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, TIMEOUT_MS);
-
-
-    // ----------------------------------------------------------
-    // ENVIAR A APPS SCRIPT
-    // ----------------------------------------------------------
-    //
-    // IMPORTANTE:
-    //
-    // NO usamos await.
-    // NO pausamos scanner.
-    // NO usamos scanner.pause().
-    //
-    // Por eso el lector continúa funcionando.
-    // ----------------------------------------------------------
-
-    fetch(url, { signal: controller.signal })
+    return fetch(url, { signal: controller.signal })
 
       .then(response => {
-
         clearTimeout(timeoutId);
-
-        if (!response.ok) {
-
-          throw new Error(
-            'HTTP ' +
-            response.status
-          );
-
-        }
-
+        if (!response.ok) throw new Error('HTTP ' + response.status);
         return response.json();
-
       })
 
       .then(data => {
-
-        // ------------------------------------------------------
-        // REINTENTO AUTOMÁTICO cuando el servidor responde (HTTP 200,
-        // sin timeout de red) pero con el error específico de
-        // "candado ocupado" (LockService). Esto pasa cuando varios
-        // escaneos casi simultáneos compiten por el mismo candado del
-        // lado del servidor — es transitorio, así que reintentar una
-        // vez casi siempre resuelve el problema sin que el auxiliar
-        // tenga que volver a escanear a mano.
-        // ------------------------------------------------------
 
         const esErrorDeCandado =
           !data.success &&
           data.message &&
           /tiempo de espera|bloqueo/i.test(data.message);
 
-        if (esErrorDeCandado && !esReintento) {
-
-          enVuelo.delete(idAlumno);
-          actualizarContadorPendientes();
-
-          estadoDiv.textContent =
-            'Reintentando ' + idAlumno + '…';
-
-          marcarAsistencia(idAlumno, true);
-
-          return; // no mostramos error todavía, se reintenta
+        if (esErrorDeCandado && entrada.intentos < MAX_INTENTOS) {
+          estadoDiv.textContent = 'Reintentando ' + idAlumno + '…';
+          return ejecutarConReintentos(idAlumno, entrada); // mismo requestId
         }
 
         mostrarResultado(
-
           !!data.success,
-
-          data.message ||
-          'Registro procesado.',
-
-          data.alumno
-            ? data.alumno.Nombre_Completo
-            : null,
-
+          data.message || 'Registro procesado.',
+          data.alumno ? data.alumno.Nombre_Completo : null,
           data.smsEstado || null
-
         );
-
-        // Cooldown normal solo cuando SÍ terminó (éxito o error
-        // definitivo del servidor, no timeout de red).
-        alumnosRecientes.set(idAlumno, Date.now());
-
       })
 
       .catch(err => {
-
         clearTimeout(timeoutId);
 
-        const fueTimeout =
-          err && err.name === 'AbortError';
+        const fueTimeout = err && err.name === 'AbortError';
 
-        // ------------------------------------------------------
-        // REINTENTO AUTOMÁTICO (1 vez) si fue timeout o falla de
-        // red — sin esto, un solo error de conexión obligaba al
-        // auxiliar a volver a escanear manualmente.
-        // ------------------------------------------------------
-
-        if (!esReintento) {
-
-          enVuelo.delete(idAlumno);
-          actualizarContadorPendientes();
-
-          estadoDiv.textContent =
-            'Reintentando ' + idAlumno + '…';
-
-          marcarAsistencia(idAlumno, true);
-
-          return; // no mostramos error todavía, se reintenta
+        if (entrada.intentos < MAX_INTENTOS) {
+          estadoDiv.textContent = 'Reintentando ' + idAlumno + '…';
+          return ejecutarConReintentos(idAlumno, entrada); // mismo requestId
         }
 
         mostrarResultado(
-
           false,
-
           fueTimeout
             ? 'El servidor tardó demasiado en responder. Intenta escanear de nuevo.'
             : 'No se pudo conectar con el servidor: ' + err.message
-
         );
-
-        alumnosRecientes.set(idAlumno, Date.now());
-
-      })
-
-      .finally(() => {
-
-        enVuelo.delete(idAlumno);
-        actualizarContadorPendientes();
-
-        /*
-         * La cámara nunca fue pausada.
-         *
-         * Por eso aquí NO hacemos:
-         *
-         * scanner.pause()
-         *
-         * ni:
-         *
-         * scanner.resume()
-         */
-
-        estadoDiv.textContent =
-          'Apunta la cámara al código QR…';
-
       });
-
   }
 
 

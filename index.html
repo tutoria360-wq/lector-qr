@@ -275,7 +275,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-09-16-destello-sincronizado
+  v2026-09-16-reintento-candado
 </p>
 
 <script>
@@ -736,6 +736,34 @@
 
       .then(data => {
 
+        // ------------------------------------------------------
+        // REINTENTO AUTOMÁTICO cuando el servidor responde (HTTP 200,
+        // sin timeout de red) pero con el error específico de
+        // "candado ocupado" (LockService). Esto pasa cuando varios
+        // escaneos casi simultáneos compiten por el mismo candado del
+        // lado del servidor — es transitorio, así que reintentar una
+        // vez casi siempre resuelve el problema sin que el auxiliar
+        // tenga que volver a escanear a mano.
+        // ------------------------------------------------------
+
+        const esErrorDeCandado =
+          !data.success &&
+          data.message &&
+          /tiempo de espera|bloqueo/i.test(data.message);
+
+        if (esErrorDeCandado && !esReintento) {
+
+          enVuelo.delete(idAlumno);
+          actualizarContadorPendientes();
+
+          estadoDiv.textContent =
+            'Reintentando ' + idAlumno + '…';
+
+          marcarAsistencia(idAlumno, true);
+
+          return; // no mostramos error todavía, se reintenta
+        }
+
         mostrarResultado(
 
           !!data.success,
@@ -747,7 +775,7 @@
             ? data.alumno.Nombre_Completo
             : null,
 
-          data.smsEstado || null // ← NUEVO: estado del SMS, junto con la confirmación
+          data.smsEstado || null
 
         );
 

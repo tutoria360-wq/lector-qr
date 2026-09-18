@@ -275,17 +275,37 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-09-17-diagnostico-tiempos-en-pantalla
+  v2026-09-17-cache-local-confirmacion-instantanea
 </p>
 
 <script>
 
   // ============================================================
-  // URL DE APPS SCRIPT
+  // URL DE APPS SCRIPT (directa) Y URL DEL PROXY (Cloudflare Worker)
   // ============================================================
+  //
+  // URL_APPS_SCRIPT se deja aquí solo como referencia/respaldo (por si
+  // algún día quieres volver a llamar directo, o comparar tiempos).
+  // La petición real ahora se manda a URL_PROXY: un Cloudflare Worker que
+  // reenvía la llamada a Apps Script por SU PROPIA conexión (rápida) y le
+  // devuelve al celular una sola respuesta ya resuelta, en vez de que el
+  // celular tenga que seguir él mismo la redirección que Apps Script
+  // siempre hace. Ver cloudflare-worker-proxy.js para el código del Worker
+  // y las instrucciones de despliegue.
+  //
+  // ⚠️ Reemplaza URL_PROXY por la URL que te dio Cloudflare al desplegar
+  // el Worker (algo como https://asistencia-proxy.TU-USUARIO.workers.dev).
 
   const URL_APPS_SCRIPT =
     'https://script.google.com/macros/s/AKfycbydoOxtfEKVxvqT7OTwxmtUXlWTBsTi41sVE_LJFFC23EMwfMMzohBoxCsqIC8-tNXh/exec';
+
+  const URL_PROXY =
+    'https://asistencia-proxy.tutoria360.workers.dev/';
+
+  // Esta es la URL que efectivamente se usa para cada escaneo. Si todavía
+  // no desplegaste el Worker, cambia esto temporalmente a URL_APPS_SCRIPT
+  // para seguir usando el sistema mientras tanto.
+  const URL_ENVIO = URL_PROXY;
 
 
   // ============================================================
@@ -390,8 +410,248 @@
 
 
   // ============================================================
-  // CAMBIAR MODO ENTRADA / SALIDA
+  // CACHÉ LOCAL DE ALUMNOS (localStorage) — CONFIRMACIÓN INSTANTÁNEA
   // ============================================================
+  //
+  // Guarda una copia de la lista de alumnos en el propio celular, para que
+  // cada escaneo pueda validar "¿existe?", "¿vencido?", "¿retirado?" AL
+  // INSTANTE, sin esperar respuesta del servidor — el sonido y la
+  // confirmación verde/roja dejan de depender de la latencia de red para
+  // estos casos (los más frecuentes). El registro real de asistencia se
+  // sigue mandando al servidor, pero en segundo plano, sin bloquear el
+  // siguiente escaneo.
+  //
+  // TRADE-OFF ACEPTADO: si un alumno fue registrado, renovado, o retirado
+  // hace muy poco (menos de lo que tarda en refrescarse esta caché), la
+  // validación local puede estar desactualizada por un rato corto. Se
+  // mitiga refrescando automáticamente cada 30 minutos y al abrir la app.
+
+  const CLAVE_CACHE_ALUMNOS = 'academia_alumnos_cache_v1';
+  const INTERVALO_REFRESCO_CACHE_MS = 30 * 60 * 1000; // 30 minutos
+
+  let cacheAlumnos = null; // { alumnos: [...], porId: {...}, porDni: {...}, timestamp }
+
+  function guardarCacheAlumnosEnStorage_(alumnos) {
+    const paquete = { alumnos: alumnos, timestamp: Date.now() };
+    try {
+      localStorage.setItem(CLAVE_CACHE_ALUMNOS, JSON.stringify(paquete));
+    } catch (e) {
+      console.warn('No se pudo guardar la caché de alumnos en localStorage:', e);
+    }
+    indexarCacheAlumnos_(alumnos, paquete.timestamp);
+  }
+
+  function indexarCacheAlumnos_(alumnos, timestamp) {
+    const porId = {};
+    const porDni = {};
+    (alumnos || []).forEach(function (a, i) {
+      if (a.ID_Alumno) porId[String(a.ID_Alumno).trim()] = i;
+      if (a.DNI) porDni[String(a.DNI).trim()] = i;
+    });
+    cacheAlumnos = { alumnos: alumnos || [], porId: porId, porDni: porDni, timestamp: timestamp || 0 };
+  }
+
+  function cargarCacheAlumnosDeStorage_() {
+    try {
+      const crudo = localStorage.getItem(CLAVE_CACHE_ALUMNOS);
+      if (!crudo) return;
+      const paquete = JSON.parse(crudo);
+      indexarCacheAlumnos_(paquete.alumnos, paquete.timestamp);
+    } catch (e) {
+      console.warn('No se pudo leer la caché de alumnos de localStorage:', e);
+    }
+  }
+
+  /** Busca un alumno en la caché local, por ID interno o por DNI. */
+  function buscarAlumnoEnCache(idBuscado) {
+    if (!cacheAlumnos) return null;
+    const buscado = String(idBuscado).trim();
+    let pos = Object.prototype.hasOwnProperty.call(cacheAlumnos.porId, buscado)
+      ? cacheAlumnos.porId[buscado]
+      : (Object.prototype.hasOwnProperty.call(cacheAlumnos.porDni, buscado) ? cacheAlumnos.porDni[buscado] : undefined);
+    if (pos === undefined) return null;
+    return cacheAlumnos.alumnos[pos];
+  }
+
+  /** Convierte "dd/MM/yyyy" a Date. Devuelve null si el formato no calza. */
+  function parseFechaDDMMYYYY_(str) {
+    if (!str) return null;
+    const partes = String(str).trim().split('/');
+    if (partes.length !== 3) return null;
+    const d = parseInt(partes[0], 10), m = parseInt(partes[1], 10), a = parseInt(partes[2], 10);
+    if (!d || !m || !a) return null;
+    return new Date(a, m - 1, d);
+  }
+
+  function alumnoEstaVencido_(alumno) {
+    const fechaVenc = parseFechaDDMMYYYY_(alumno.Fecha_Vencimiento);
+    if (!fechaVenc) return false; // si no se puede leer la fecha, no se bloquea localmente por las dudas
+    const hoy = new Date();
+    hoy.setHours(0, 0, 0, 0);
+    return fechaVenc < hoy;
+  }
+
+  /** Descarga la lista de alumnos del servidor (vía el proxy) y actualiza la caché local. */
+  function refrescarCacheAlumnos() {
+    if (!URL_ENVIO || URL_ENVIO.indexOf('PEGA-AQUI') > -1) return;
+    fetch(URL_ENVIO + '?accion=listaAlumnos')
+      .then(r => r.json())
+      .then(data => {
+        if (data && data.success && Array.isArray(data.alumnos)) {
+          guardarCacheAlumnosEnStorage_(data.alumnos);
+          console.log('Caché de alumnos actualizada: ' + data.alumnos.length + ' alumno(s).');
+        }
+      })
+      .catch(err => {
+        // Si falla el refresco, simplemente se sigue usando la copia local
+        // que ya había (o ninguna, si es la primera vez y no hay señal) —
+        // no debe interrumpir el flujo de escaneo.
+        console.warn('No se pudo refrescar la caché de alumnos:', err);
+      });
+  }
+
+  // ============================================================
+  // COLA PERSISTENTE DE REGISTROS PENDIENTES (localStorage)
+  // ============================================================
+  //
+  // Cuando el registro real (el que sí escribe la fila en Sheets) no logra
+  // llegar al servidor tras los reintentos normales — por señal caída o muy
+  // lenta —, en vez de mostrarle un error al auxiliar (que ya vio la
+  // confirmación verde, basada en la validación local), el intento se
+  // guarda aquí y se reintenta solo en segundo plano, incluso si la página
+  // se recarga o el celular se apaga y se vuelve a prender.
+
+  const CLAVE_COLA_PENDIENTE = 'academia_cola_pendiente_v1';
+  const INTERVALO_REINTENTO_COLA_MS = 5000; // cada 5 segundos
+  const MAX_INTENTOS_COLA = 20; // ~100 segundos de reintentos automáticos antes de pausar
+
+  function leerColaPendiente_() {
+    try {
+      const crudo = localStorage.getItem(CLAVE_COLA_PENDIENTE);
+      return crudo ? JSON.parse(crudo) : [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  function guardarColaPendiente_(cola) {
+    try {
+      localStorage.setItem(CLAVE_COLA_PENDIENTE, JSON.stringify(cola));
+    } catch (e) {
+      console.warn('No se pudo guardar la cola pendiente en localStorage:', e);
+    }
+  }
+
+  function agregarAColaPendiente_(item) {
+    const cola = leerColaPendiente_();
+    cola.push(item);
+    guardarColaPendiente_(cola);
+    actualizarContadorPendientes();
+  }
+
+  /** ¿Hay un intento ya en curso o en cola persistente para este alumno? */
+  function alumnoTieneAlgoPendiente(idAlumno) {
+    if (enProceso.has(idAlumno)) return true;
+    return leerColaPendiente_().some(function (item) { return item.idAlumno === idAlumno; });
+  }
+
+  /**
+   * Recorre la cola persistente e intenta reenviar cada item, UNO POR
+   * INTENTO por cada pasada (no reintentos en ráfaga) — así, si la red
+   * sigue caída, no se satura de solicitudes esperando timeout todas a la
+   * vez. Los que superan MAX_INTENTOS_COLA quedan marcados como
+   * "requierenRevisionManual" y dejan de reintentarse solos (para no
+   * gastar batería/datos indefinidamente si algo está genuinamente mal),
+   * pero SIGUEN en la cola, visibles, hasta que el auxiliar los reenvíe a
+   * mano con el botón correspondiente.
+   */
+  function procesarColaPendientePersistente() {
+    const cola = leerColaPendiente_();
+    if (cola.length === 0) return;
+
+    const pendientesDeIntentar = cola.filter(function (item) { return !item.requiereRevisionManual; });
+    if (pendientesDeIntentar.length === 0) return;
+
+    // Procesa de a uno por pasada del intervalo, para no bombardear la red
+    // si hay varios acumulados — el siguiente se intentará en la próxima
+    // pasada (5 segundos después).
+    const item = pendientesDeIntentar[0];
+    item.intentos = (item.intentos || 0) + 1;
+
+    const url =
+      URL_ENVIO +
+      '?accion=marcarAsistencia' +
+      '&idAlumno=' + encodeURIComponent(item.idAlumno) +
+      '&tipoMovimiento=' + encodeURIComponent(item.tipoMovimiento) +
+      '&requestId=' + encodeURIComponent(item.requestId);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+    fetch(url, { signal: controller.signal })
+      .then(r => { clearTimeout(timeoutId); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(data => {
+        quitarDeColaPendiente_(item.requestId);
+        if (!data.success && esRechazoDeNegocio_(data)) {
+          // El servidor rechazó por una razón de negocio real (vencido,
+          // retirado, etc.) que la validación local no detectó a tiempo
+          // (caché desactualizada). Se avisa explícitamente, porque el
+          // auxiliar ya había dejado pasar al alumno con la confirmación
+          // optimista.
+          mostrarAlertaCorreccion_(item.nombreAlumno || item.idAlumno, data.message);
+        }
+        // Si success:true, no hace falta avisar nada — ya se confirmó al
+        // momento del escaneo.
+      })
+      .catch(() => {
+        clearTimeout(timeoutId);
+        // Sigue sin poder enviarse: se actualiza el contador de intentos
+        // en la cola guardada, y se reintenta en la próxima pasada.
+        const colaActual = leerColaPendiente_();
+        const idx = colaActual.findIndex(function (c) { return c.requestId === item.requestId; });
+        if (idx > -1) {
+          colaActual[idx].intentos = item.intentos;
+          if (item.intentos >= MAX_INTENTOS_COLA) {
+            colaActual[idx].requiereRevisionManual = true;
+          }
+          guardarColaPendiente_(colaActual);
+          actualizarContadorPendientes();
+        }
+      });
+  }
+
+  function quitarDeColaPendiente_(requestId) {
+    const cola = leerColaPendiente_().filter(function (item) { return item.requestId !== requestId; });
+    guardarColaPendiente_(cola);
+    actualizarContadorPendientes();
+  }
+
+  /** Reintenta AHORA MISMO (sin esperar el próximo intervalo) todos los pendientes, incluidos los pausados. */
+  function reintentarColaPendienteManualmente() {
+    const cola = leerColaPendiente_().map(function (item) {
+      item.requiereRevisionManual = false; // se les da otra oportunidad
+      return item;
+    });
+    guardarColaPendiente_(cola);
+    procesarColaPendientePersistente();
+  }
+
+  /** ¿Este resultado del servidor es un rechazo de NEGOCIO (no un problema de red/candado)? */
+  function esRechazoDeNegocio_(data) {
+    return !!(data && data.tipoError && ['vencido', 'retirado', 'no_registrado', 'muy_reciente'].indexOf(data.tipoError) > -1);
+  }
+
+  /** Alerta de corrección: se muestra cuando la validación local decía "ok" pero el servidor, al confirmar de verdad, rechazó el registro. */
+  function mostrarAlertaCorreccion_(nombreOId, mensajeServidor) {
+    const div = document.createElement('div');
+    div.className = 'resultado duplicado';
+    div.innerHTML = '⚠️ <strong>Revisar ' + nombreOId + ':</strong> ' + mensajeServidor;
+    resultadoDiv.prepend(div);
+    beepError();
+    vibrar([100, 60, 100, 60, 100]); // patrón distinto: llama más la atención que un error normal
+  }
+
+
 
   function elegirModo(modo) {
 
@@ -551,15 +811,30 @@
 
   function actualizarContadorPendientes() {
 
-    const total = enProceso.size;
+    const enMemoria = enProceso.size;
+    const cola = leerColaPendiente_();
+    const enColaPersistente = cola.length;
+    const requierenRevision = cola.filter(function (i) { return i.requiereRevisionManual; }).length;
+
+    const total = enMemoria + enColaPersistente;
 
     if (total === 0) {
-      pendientesDiv.textContent = '';
+      pendientesDiv.innerHTML = '';
+      return;
+    }
+
+    let texto = total === 1 ? '1 registro procesándose…' : total + ' registros procesándose…';
+    if (enColaPersistente > 0) {
+      texto = enColaPersistente === 1
+        ? '1 registro pendiente de sincronizar (guardado, se reintenta solo)'
+        : enColaPersistente + ' registros pendientes de sincronizar (guardados, se reintentan solos)';
+    }
+
+    if (requierenRevision > 0) {
+      pendientesDiv.innerHTML = texto +
+        ' <button onclick="reintentarColaPendienteManualmente()" style="margin-left:6px;padding:2px 8px;font-size:11px;">Reintentar ahora</button>';
     } else {
-      pendientesDiv.textContent =
-        total === 1
-          ? '1 registro procesándose…'
-          : total + ' registros procesándose…';
+      pendientesDiv.textContent = texto;
     }
   }
 
@@ -643,25 +918,73 @@
       return;
     }
 
-    // ---- Ya hay un intento en curso para este alumno: ignorar en silencio ----
-    // (cubre tanto el primer intento como cualquiera de sus reintentos
-    // automáticos, porque todos comparten la MISMA entrada en el mapa)
-    if (enProceso.has(idAlumno)) {
+    // ---- Ya hay un intento en curso (en memoria) O en la cola persistente para este alumno: ignorar en silencio ----
+    if (alumnoTieneAlgoPendiente(idAlumno)) {
       return;
     }
 
     if (
-      !URL_APPS_SCRIPT ||
-      URL_APPS_SCRIPT.indexOf('PEGA_AQUI') > -1
+      !URL_ENVIO ||
+      URL_ENVIO.indexOf('PEGA-AQUI') > -1
     ) {
-      mostrarResultado(false, 'Falta configurar la URL de Apps Script.');
+      mostrarResultado(false, 'Falta configurar la URL del proxy (URL_PROXY) en el lector.');
       return;
     }
 
-    // ---- Reservar el turno de este alumno INMEDIATAMENTE ----
-    // Se reserva ahora (aunque la solicitud real recién se envíe cuando le
-    // toque turno en la cola) para que, si la cámara sigue viendo el mismo
-    // QR mientras espera en cola, no se generen entradas repetidas.
+    // ============================================================
+    // VALIDACIÓN LOCAL PRIMERO — esto es lo que hace que el sonido y la
+    // confirmación verde sean estables sin importar la red, para los casos
+    // más frecuentes (alumno válido, o alumno vencido/retirado).
+    // ============================================================
+    const alumnoLocal = buscarAlumnoEnCache(idAlumno);
+
+    if (alumnoLocal) {
+
+      if (alumnoLocal.Estado_Matricula === 'Retirado') {
+        // Rechazo seguro de decidir 100% localmente: el servidor tampoco
+        // lo dejaría pasar, así que ni siquiera hace falta gastar una
+        // llamada de red para esto — confirmación instantánea.
+        alumnosRecientes.set(idAlumno, ahora);
+        mostrarResultado(false, alumnoLocal.Nombre_Completo + ' está RETIRADO. No se puede registrar asistencia.', alumnoLocal.Nombre_Completo);
+        return;
+      }
+
+      if (alumnoEstaVencido_(alumnoLocal)) {
+        alumnosRecientes.set(idAlumno, ahora);
+        mostrarResultado(false, 'Matrícula VENCIDA (' + alumnoLocal.Fecha_Vencimiento + '). ' + alumnoLocal.Nombre_Completo + ' debe renovar.', alumnoLocal.Nombre_Completo);
+        return;
+      }
+
+      // Alumno válido según la copia local: confirmación INSTANTÁNEA
+      // (beep + verde), y el registro real se manda en segundo plano.
+      const requestId = idAlumno + '_' + ahora + '_' + Math.random().toString(36).slice(2, 8);
+      enProceso.set(idAlumno, { requestId: requestId, intentos: 0 }); // solo para el cooldown/anti-doble-tap visual
+      actualizarContadorPendientes();
+
+      mostrarResultado(
+        true,
+        alumnoLocal.Nombre_Completo + ' — ' + modoActual + ' registrada (' + new Date().toLocaleTimeString('es-PE', { hour: 'numeric', minute: '2-digit' }) + ')',
+        alumnoLocal.Nombre_Completo,
+        modoActual === 'Entrada' ? '📩 Notificación en camino…' : null
+      );
+
+      enviarRegistroEnSegundoPlano_(idAlumno, modoActual, requestId, alumnoLocal.Nombre_Completo);
+      alumnosRecientes.set(idAlumno, ahora);
+      // Libera el "en proceso" apenas se confirma visualmente — el envío
+      // real ya sigue su propio camino independiente (cola persistente si
+      // hace falta), no necesita bloquear un reescaneo del mismo alumno.
+      enProceso.delete(idAlumno);
+      actualizarContadorPendientes();
+      return;
+    }
+
+    // ============================================================
+    // ALUMNO NO ENCONTRADO EN LA CACHÉ LOCAL — puede ser un alumno
+    // genuinamente nuevo que aún no se sincronizó, o la primera vez que se
+    // abre el lector y todavía no bajó la lista. En este caso SÍ se espera
+    // la respuesta completa del servidor (comportamiento anterior), porque
+    // no hay base local para decidir con confianza.
+    // ============================================================
     const requestId = idAlumno + '_' + ahora + '_' + Math.random().toString(36).slice(2, 8);
     const entrada = { requestId: requestId, intentos: 0 };
     enProceso.set(idAlumno, entrada);
@@ -669,6 +992,67 @@
 
     colaEspera.push({ idAlumno: idAlumno, entrada: entrada });
     procesarCola();
+  }
+
+  /**
+   * Envía el registro real al servidor SIN bloquear la UI (ya se confirmó
+   * de forma optimista). Reutiliza la misma clasificación de errores que
+   * ejecutarConReintentos (red/candado = reintentar; negocio = rechazo
+   * real). Si tras MAX_INTENTOS no se logra, en vez de mostrar un error
+   * (el auxiliar ya vio verde y el alumno ya pasó), se guarda en la cola
+   * persistente para reintentar solo, incluso entre recargas de página.
+   */
+  function enviarRegistroEnSegundoPlano_(idAlumno, tipoMovimiento, requestId, nombreAlumno, intentoActual) {
+    intentoActual = (intentoActual || 0) + 1;
+
+    const url =
+      URL_ENVIO +
+      '?accion=marcarAsistencia' +
+      '&idAlumno=' + encodeURIComponent(idAlumno) +
+      '&tipoMovimiento=' + encodeURIComponent(tipoMovimiento) +
+      '&requestId=' + encodeURIComponent(requestId);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
+
+    fetch(url, { signal: controller.signal })
+      .then(response => {
+        clearTimeout(timeoutId);
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.json();
+      })
+      .then(data => {
+        const esErrorDeCandado = !data.success && data.message && /tiempo de espera|bloqueo/i.test(data.message);
+
+        if (esErrorDeCandado && intentoActual < MAX_INTENTOS) {
+          return enviarRegistroEnSegundoPlano_(idAlumno, tipoMovimiento, requestId, nombreAlumno, intentoActual);
+        }
+
+        if (!data.success && esRechazoDeNegocio_(data)) {
+          // La caché local decía que estaba todo bien pero el servidor
+          // (con datos más frescos) rechazó de verdad — se avisa, porque
+          // ya se dejó pasar al alumno con la confirmación optimista.
+          mostrarAlertaCorreccion_(nombreAlumno || idAlumno, data.message);
+        }
+        // Si success:true, no se necesita hacer nada más — ya se confirmó
+        // al momento del escaneo.
+      })
+      .catch(err => {
+        clearTimeout(timeoutId);
+        if (intentoActual < MAX_INTENTOS) {
+          return enviarRegistroEnSegundoPlano_(idAlumno, tipoMovimiento, requestId, nombreAlumno, intentoActual);
+        }
+        // Se agotaron los reintentos inmediatos: pasa a la cola persistente,
+        // que seguirá reintentando en segundo plano cada 5 segundos.
+        agregarAColaPendiente_({
+          idAlumno: idAlumno,
+          tipoMovimiento: tipoMovimiento,
+          requestId: requestId,
+          nombreAlumno: nombreAlumno,
+          creadoEn: Date.now(),
+          intentos: 0
+        });
+      });
   }
 
 
@@ -738,7 +1122,7 @@
     estadoDiv.textContent = 'Enviando ' + modoActual + '…';
 
     const url =
-      URL_APPS_SCRIPT +
+      URL_ENVIO +
       '?accion=marcarAsistencia' +
       '&idAlumno=' + encodeURIComponent(idAlumno) +
       '&tipoMovimiento=' + encodeURIComponent(modoActual) +
@@ -804,6 +1188,20 @@
         );
       });
   }
+
+
+  // ============================================================
+  // INICIALIZACIÓN DE CACHÉ LOCAL Y COLA PERSISTENTE
+  // ============================================================
+  // Se hace apenas carga la página, ANTES de que la cámara esté lista,
+  // para que la caché ya esté disponible desde el primer escaneo posible.
+
+  cargarCacheAlumnosDeStorage_();      // usa la copia local si ya existía
+  refrescarCacheAlumnos();             // y de todos modos pide una versión fresca
+  setInterval(refrescarCacheAlumnos, INTERVALO_REFRESCO_CACHE_MS);
+
+  actualizarContadorPendientes();      // por si quedaron pendientes de una sesión anterior
+  setInterval(procesarColaPendientePersistente, INTERVALO_REINTENTO_COLA_MS);
 
 
   // ============================================================

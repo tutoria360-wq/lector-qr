@@ -275,7 +275,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-09-16-cola-idempotencia
+  v2026-09-17-diagnostico-tiempos-en-pantalla
 </p>
 
 <script>
@@ -572,9 +572,25 @@
   // "smsEstado" en la respuesta de registrarAsistencia), se muestra como
   // una línea aparte debajo del mensaje principal, junto con la misma
   // confirmación verde/roja — sin esperar a una segunda respuesta.
+  //
+  // NUEVO parámetro "diagnosticoTiempos": objeto con los milisegundos que
+  // tardó cada paso del lado del servidor (ver Código.gs). Se muestra en
+  // una línea diminuta debajo de todo, solo mientras se está diagnosticando
+  // la demora de los escaneos — así no hay que entrar al panel de
+  // Ejecuciones de Apps Script, basta con leer la pantalla del celular
+  // después de escanear.
   // ============================================================
 
-  function mostrarResultado(ok, texto, nombre, smsEstado) {
+  function mostrarResultado(ok, texto, nombre, smsEstado, diagnosticoTiempos) {
+
+    let lineaDiag = '';
+    if (diagnosticoTiempos) {
+      const partes = Object.keys(diagnosticoTiempos).map(k => k + '=' + diagnosticoTiempos[k]);
+      lineaDiag =
+        '<div style="margin-top:8px;font-size:10px;color:#64748b;font-family:monospace;word-break:break-all;">' +
+        '⏱️ ' + partes.join(' · ') +
+        '</div>';
+    }
 
     resultadoDiv.innerHTML =
 
@@ -595,6 +611,8 @@
       (smsEstado
         ? '<div class="sms-linea">📩 ' + smsEstado + '</div>'
         : '') +
+
+      lineaDiag +
 
       '</div>';
 
@@ -729,6 +747,8 @@
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
+    const tEnvioFetch = Date.now();
+
     return fetch(url, { signal: controller.signal })
 
       .then(response => {
@@ -749,11 +769,20 @@
           return ejecutarConReintentos(idAlumno, entrada); // mismo requestId
         }
 
+        // ---- DIAGNÓSTICO (v9.2) — se agrega el tiempo TOTAL medido desde
+        // el propio navegador (fetch de ida y vuelta), para compararlo con
+        // el "total_ms" que reporta el servidor. La diferencia entre ambos
+        // es, aproximadamente, la latencia pura de red entre el celular y
+        // los servidores de Apps Script.
+        const diag = Object.assign({}, data.diagnosticoTiempos || {});
+        diag.fetchIdaYVuelta_ms = Date.now() - tEnvioFetch;
+
         mostrarResultado(
           !!data.success,
           data.message || 'Registro procesado.',
           data.alumno ? data.alumno.Nombre_Completo : null,
-          data.smsEstado || null
+          data.smsEstado || null,
+          diag
         );
       })
 

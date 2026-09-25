@@ -117,6 +117,39 @@
     border: 1px solid #92400e;
   }
 
+  /*
+   * NUEVO — badge "DUPLICADO" bien resaltante (pulsante) arriba del
+   * mensaje, para que se note de inmediato incluso sin leer el texto.
+   */
+  .badge-duplicado {
+    display: inline-block;
+    background: #f59e0b;
+    color: #451a03;
+    font-weight: 800;
+    font-size: 13px;
+    letter-spacing: 1px;
+    padding: 4px 14px;
+    border-radius: 999px;
+    margin-bottom: 8px;
+    animation: pulso-duplicado 1s ease-in-out infinite;
+  }
+
+  @keyframes pulso-duplicado {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+
+  /* NUEVO — línea con DNI / modalidad / grupo del alumno en el aviso de duplicado. */
+  .datos-alumno-dup {
+    font-size: 12px;
+    color: #fcd34d;
+    margin-bottom: 6px;
+  }
+
+  .mensaje-duplicado {
+    font-size: 14px;
+  }
+
   .nombre {
     font-weight: 700;
     font-size: 17px;
@@ -286,7 +319,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-09-24-camara-auto-pausa-duplicados-instantaneos
+  v2026-09-25-duplicado-resaltado-camara-pausa
 </p>
 
 <script>
@@ -341,7 +374,7 @@
 
   /*
    * ============================================================
-   * APAGADO AUTOMÁTICO DE CÁMARA (NUEVO)
+   * APAGADO AUTOMÁTICO DE CÁMARA
    * ============================================================
    *
    * camaraDeviceId: el ID de la cámara elegida (trasera si existe), guardado
@@ -353,11 +386,18 @@
    * iniciar una ya iniciada (evita errores y llamadas redundantes de
    * html5-qrcode).
    *
+   * pausadoPorCooldown: true mientras la cámara está en una pausa breve
+   * (scanner.pause()) justo después de una lectura, para que el mismo QR
+   * — si sigue frente al lente — no se vuelva a decodificar de inmediato
+   * y dispare un aviso de "duplicado" encima del mensaje de éxito. Es
+   * independiente de camaraActiva/stop()-start(): aquí el stream de video
+   * sigue vivo, solo se deja de decodificar un momento.
+   *
    * CONFIG_QR: configuración de fps/qrbox reutilizada tanto en el primer
    * arranque como en cada reinicio automático, para que el comportamiento
    * de escaneo sea siempre el mismo.
    *
-   * Cuándo se apaga sola la cámara:
+   * Cuándo se apaga sola la cámara (stop completo):
    *  - El usuario bloquea la pantalla del celular o cambia a otra app
    *    (evento "visibilitychange" con document.hidden = true).
    *  - El usuario navega fuera de la página o la cierra (evento "pagehide").
@@ -368,6 +408,7 @@
    */
   let camaraDeviceId = null;
   let camaraActiva = false;
+  let pausadoPorCooldown = false;
 
   const CONFIG_QR = {
     fps: 10,
@@ -445,7 +486,7 @@
 
   /*
    * ============================================================
-   * ESTADO DE SOLICITUDES — REDISEÑO COMPLETO (ver análisis del problema)
+   * ESTADO DE SOLICITUDES
    * ============================================================
    *
    * enProceso: Map<idAlumno, entrada> donde "entrada" es un objeto único
@@ -770,22 +811,34 @@
   }
 
   /**
-   * NUEVO — Muestra INMEDIATAMENTE un aviso de "duplicado" (mismo QR ya
-   * procesado hace un instante, o todavía en curso), en vez de ignorar el
-   * escaneo en silencio como antes. Usa el mismo estilo ámbar ".duplicado"
-   * que ya existía para las correcciones, para que el auxiliar aprenda a
-   * asociar ese color con "no es un error, solo espera un momento".
-   * Un sonido suave y una vibración corta refuerzan que esto NO es ni un
-   * éxito ni un error real.
+   * Muestra INMEDIATAMENTE un aviso de "duplicado" (mismo QR ya procesado
+   * hace un instante, o todavía en curso), con un badge bien resaltante y
+   * los datos del alumno (nombre, DNI, modalidad/grupo) tomados de la
+   * caché local — así el auxiliar identifica de un vistazo A QUIÉN
+   * corresponde el aviso, sin tener que leer solo el ID/DNI escaneado.
+   *
+   * "alumno": objeto de la caché local (buscarAlumnoEnCache) o null si no
+   * se encontró (por ejemplo, un DNI mal escrito). En ese caso se muestra
+   * el aviso igual, sin la ficha de datos.
    */
-  function mostrarDuplicadoInmediato_(mensaje, nombre) {
+  function mostrarDuplicadoInmediato_(mensaje, alumno) {
+    const datosExtra = alumno
+      ? '<div class="datos-alumno-dup">' +
+          (alumno.DNI ? 'DNI: ' + alumno.DNI : '') +
+          (alumno.Modalidad ? ' &nbsp;·&nbsp; ' + alumno.Modalidad : '') +
+          (alumno.Grupo_Salon ? ' - ' + alumno.Grupo_Salon : '') +
+        '</div>'
+      : '';
+
     resultadoDiv.innerHTML =
       '<div class="resultado duplicado">' +
-      (nombre ? '<div class="nombre">' + nombre + '</div>' : '') +
-      '⏳ ' + mensaje +
+      '<div class="badge-duplicado">⏳ DUPLICADO</div>' +
+      (alumno ? '<div class="nombre">' + alumno.Nombre_Completo + '</div>' : '') +
+      datosExtra +
+      '<div class="mensaje-duplicado">' + mensaje + '</div>' +
       '</div>';
-    beep(440, 120); // tono corto y suave, distinto del beep de éxito/error
-    vibrar(50);
+
+    beepDuplicado();
   }
 
 
@@ -825,8 +878,8 @@
   // SONIDO DE FEEDBACK (sin archivos externos)
   // ============================================================
   //
-  // Deja que el auxiliar sepa si el escaneo entró bien o falló
-  // SIN tener que leer la pantalla — esto agiliza mucho el
+  // Deja que el auxiliar sepa si el escaneo entró bien, falló, o es un
+  // duplicado, SIN tener que leer la pantalla — esto agiliza mucho el
   // flujo real cuando hay una fila de alumnos esperando.
   //
   // AJUSTE DE VOLUMEN: se subió la ganancia de 0.15 a 0.9 (el
@@ -892,6 +945,19 @@
   function beepError() {
     beep(220, 300);
     vibrar([80, 60, 80]); // dos vibraciones cortas = error/atención
+  }
+
+  /**
+   * NUEVO — Sonido/vibración propios para "duplicado", distintos de éxito
+   * (un tono agudo único) y de error (un tono grave único): dos "bips"
+   * cortos de tono medio-agudo en rápida sucesión, con un patrón de
+   * vibración de tres pulsos muy cortos. Así, con los ojos cerrados, el
+   * auxiliar puede distinguir los tres casos solo por el sonido.
+   */
+  function beepDuplicado() {
+    beep(660, 90);
+    setTimeout(() => beep(660, 90), 150);
+    vibrar([40, 40, 40]);
   }
 
   /*
@@ -1027,13 +1093,11 @@
   // input manual). Ya NO envía la solicitud directamente: la encola, y es
   // la cola (procesarCola) la que respeta el límite de concurrencia.
   //
-  // CAMBIO — MENSAJES DE DUPLICADO INMEDIATOS: antes, un reescaneo dentro
-  // del cooldown o mientras ya había un intento en curso se ignoraba en
-  // silencio (return sin avisar nada). Ahora, en ambos casos se muestra al
-  // instante un aviso ámbar de "duplicado" (mostrarDuplicadoInmediato_),
-  // con su propio sonido corto — así el auxiliar entiende de inmediato que
-  // el escaneo SÍ fue detectado, pero que ese alumno ya se registró o se
-  // está registrando, en vez de pensar que la cámara no reaccionó.
+  // Los mensajes de "duplicado" se muestran al instante, con el badge
+  // resaltante y los datos del alumno (ver mostrarDuplicadoInmediato_),
+  // en vez de ignorarse en silencio como en versiones muy antiguas — así
+  // el auxiliar entiende de inmediato que el escaneo SÍ fue detectado,
+  // pero que ese alumno ya se registró o se está registrando.
   // ============================================================
 
   function marcarAsistencia(idAlumnoRaw) {
@@ -1041,17 +1105,16 @@
     const idAlumno = (idAlumnoRaw || '').trim();
     if (!idAlumno) return;
 
-    // Nombre para mostrar en los avisos, si ya está en la caché local;
-    // si no, se usa el ID/DNI tal cual.
+    // Objeto completo del alumno (si está en la caché local), para poder
+    // mostrar su ficha completa en los avisos de duplicado.
     const alumnoLocalParaNombre = buscarAlumnoEnCache(idAlumno);
-    const nombreParaAviso = alumnoLocalParaNombre ? alumnoLocalParaNombre.Nombre_Completo : idAlumno;
 
     // ---- Duplicado por cooldown post-completado: avisar INMEDIATAMENTE ----
     const ahora = Date.now();
     if (ahora - (alumnosRecientes.get(idAlumno) || 0) < COOLDOWN_MS) {
       mostrarDuplicadoInmediato_(
-        nombreParaAviso + ' ya tiene un movimiento registrado hace unos segundos.',
-        alumnoLocalParaNombre ? nombreParaAviso : null
+        'Ya tiene un movimiento registrado hace unos segundos.',
+        alumnoLocalParaNombre
       );
       return;
     }
@@ -1059,8 +1122,8 @@
     // ---- Ya hay un intento en curso (en memoria) O en la cola persistente para este alumno: avisar INMEDIATAMENTE ----
     if (alumnoTieneAlgoPendiente(idAlumno)) {
       mostrarDuplicadoInmediato_(
-        nombreParaAviso + ' ya se está procesando, espera un momento.',
-        alumnoLocalParaNombre ? nombreParaAviso : null
+        'Ya se está procesando, espera un momento.',
+        alumnoLocalParaNombre
       );
       return;
     }
@@ -1448,17 +1511,31 @@
 
           decodedText => {
 
-            /*
-             * IMPORTANTE:
-             *
-             * Solo enviamos el ID.
-             *
-             * NO pausamos la cámara.
-             */
-
             marcarAsistencia(
               decodedText
             );
+
+            /*
+             * PAUSA BREVE DE LA CÁMARA (NUEVO):
+             * Justo después de procesar la lectura, se pausa la
+             * decodificación un par de segundos (COOLDOWN_MS). Así, si el
+             * QR sigue frente al lente, no se vuelve a leer de inmediato
+             * y no dispara un "duplicado" encima del mensaje de éxito que
+             * recién apareció — el auxiliar alcanza a verlo y escucharlo
+             * primero. El aviso de "duplicado" solo aparecerá si de
+             * verdad se vuelve a escanear después de que la cámara se
+             * reactive (o si se ingresa el mismo ID a mano).
+             */
+            if (scannerRef && camaraActiva && !pausadoPorCooldown) {
+              pausadoPorCooldown = true;
+              try { scannerRef.pause(true); } catch (e) {}
+              setTimeout(() => {
+                pausadoPorCooldown = false;
+                if (scannerRef && camaraActiva && !document.hidden) {
+                  try { scannerRef.resume(); } catch (e) {}
+                }
+              }, COOLDOWN_MS);
+            }
 
           },
 

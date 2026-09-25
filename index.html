@@ -59,6 +59,16 @@
     box-shadow: 0 0 24px 4px rgba(239, 68, 68, 0.7);
   }
 
+  /*
+   * NUEVO — destello de "cámara en pausa" (apagado automático por
+   * pantalla oculta). Color ámbar, distinto de verde/rojo, para que se
+   * entienda que es un estado normal (no un error) cuando se reactive.
+   */
+  #qr-reader.pausada {
+    border-color: #f59e0b;
+    box-shadow: 0 0 16px 2px rgba(245, 158, 11, 0.5);
+  }
+
   .estado {
     text-align: center;
     margin-top: 14px;
@@ -95,10 +105,11 @@
   }
 
   /*
-   * NUEVO — estilo de alerta para "duplicado / ya en vuelo". Distinto de
-   * ok (verde) y error (rojo) para que el auxiliar entienda de un vistazo
-   * que NO es un error real del servidor, sino que ese QR ya se está
-   * procesando o se acaba de leer hace un instante.
+   * Estilo de alerta para "duplicado / ya en vuelo / en proceso". Distinto
+   * de ok (verde) y error (rojo) para que el auxiliar entienda de un
+   * vistazo que NO es un error real del servidor, sino que ese QR ya se
+   * está procesando, se acaba de leer hace un instante, o el servidor lo
+   * rechazó por ser un reescaneo demasiado reciente.
    */
   .duplicado {
     background: #451a03;
@@ -113,8 +124,8 @@
   }
 
   /*
-   * NUEVO — línea para mostrar el estado del SMS junto con la confirmación
-   * de asistencia (campo "smsEstado" que ahora devuelve registrarAsistencia).
+   * Línea para mostrar el estado del SMS junto con la confirmación de
+   * asistencia (campo "smsEstado" que devuelve registrarAsistencia).
    */
   .sms-linea {
     margin-top: 8px;
@@ -275,7 +286,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-09-17-cache-local-confirmacion-instantanea
+  v2026-09-24-camara-auto-pausa-duplicados-instantaneos
 </p>
 
 <script>
@@ -321,9 +332,116 @@
   const pendientesDiv =
     document.getElementById('pendientes');
 
+  const qrReaderDiv =
+    document.getElementById('qr-reader');
+
   let scannerRef = null;
 
   let modoActual = 'Entrada';
+
+  /*
+   * ============================================================
+   * APAGADO AUTOMÁTICO DE CÁMARA (NUEVO)
+   * ============================================================
+   *
+   * camaraDeviceId: el ID de la cámara elegida (trasera si existe), guardado
+   * una sola vez al iniciar por primera vez, para poder REINICIAR la cámara
+   * más adelante sin tener que volver a listar/elegir cámaras cada vez.
+   *
+   * camaraActiva: true mientras el stream de la cámara está efectivamente
+   * corriendo. Se usa para no intentar detener una cámara ya detenida ni
+   * iniciar una ya iniciada (evita errores y llamadas redundantes de
+   * html5-qrcode).
+   *
+   * CONFIG_QR: configuración de fps/qrbox reutilizada tanto en el primer
+   * arranque como en cada reinicio automático, para que el comportamiento
+   * de escaneo sea siempre el mismo.
+   *
+   * Cuándo se apaga sola la cámara:
+   *  - El usuario bloquea la pantalla del celular o cambia a otra app
+   *    (evento "visibilitychange" con document.hidden = true).
+   *  - El usuario navega fuera de la página o la cierra (evento "pagehide").
+   * Cuándo se reactiva sola:
+   *  - El usuario vuelve a la pestaña/app (document.hidden = false).
+   * Esto evita que la cámara quede encendida consumiendo batería mientras
+   * el celular está guardado o la app en segundo plano sin usarse.
+   */
+  let camaraDeviceId = null;
+  let camaraActiva = false;
+
+  const CONFIG_QR = {
+    fps: 10,
+    qrbox: { width: 250, height: 250 }
+  };
+
+  /**
+   * Detiene la cámara si está corriendo. Segura de llamar aunque la cámara
+   * ya esté detenida o el scanner no exista todavía (no hace nada en ese
+   * caso). Deja un mensaje de estado claro para que el auxiliar entienda
+   * que es una pausa normal, no un error.
+   */
+  function detenerCamara_() {
+    if (!scannerRef || !camaraActiva) return;
+
+    scannerRef.stop()
+      .then(() => {
+        camaraActiva = false;
+        qrReaderDiv.classList.add('pausada');
+        estadoDiv.textContent = 'Cámara en pausa (pantalla oculta o app en segundo plano)…';
+      })
+      .catch(() => {
+        // Si el stop() falla por alguna razón, igual se asume detenida
+        // para no bloquear un futuro reinicio.
+        camaraActiva = false;
+      });
+  }
+
+  /**
+   * Reinicia la cámara si estaba detenida por el apagado automático.
+   * Segura de llamar aunque la cámara ya esté activa o el scanner/deviceId
+   * todavía no existan (por ejemplo, si la página recién está cargando y
+   * el primer arranque de la cámara todavía no terminó).
+   */
+  function iniciarCamara_() {
+    if (!scannerRef || !camaraDeviceId || camaraActiva) return;
+
+    qrReaderDiv.classList.remove('pausada');
+    estadoDiv.textContent = 'Reactivando cámara…';
+
+    scannerRef.start(
+      { deviceId: { exact: camaraDeviceId } },
+      CONFIG_QR,
+      decodedText => marcarAsistencia(decodedText),
+      () => {}
+    )
+      .then(() => {
+        camaraActiva = true;
+        estadoDiv.textContent = 'Apunta la cámara al código QR…';
+      })
+      .catch(err => {
+        estadoDiv.innerHTML =
+          '<div class="resultado error">No se pudo reactivar la cámara: ' +
+          ((err && err.message) || err) + '</div>';
+      });
+  }
+
+  // Pantalla oculta (bloqueo, cambio de app, minimizado) => pausa la
+  // cámara. Pantalla visible de nuevo => la reactiva sola.
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      detenerCamara_();
+    } else {
+      iniciarCamara_();
+    }
+  });
+
+  // Si el usuario navega fuera de la página o la cierra, se detiene la
+  // cámara también (buena práctica, aunque el navegador suele liberar el
+  // stream solo al cerrar la pestaña).
+  window.addEventListener('pagehide', () => {
+    detenerCamara_();
+  });
+
 
   /*
    * ============================================================
@@ -651,6 +769,25 @@
     vibrar([100, 60, 100, 60, 100]); // patrón distinto: llama más la atención que un error normal
   }
 
+  /**
+   * NUEVO — Muestra INMEDIATAMENTE un aviso de "duplicado" (mismo QR ya
+   * procesado hace un instante, o todavía en curso), en vez de ignorar el
+   * escaneo en silencio como antes. Usa el mismo estilo ámbar ".duplicado"
+   * que ya existía para las correcciones, para que el auxiliar aprenda a
+   * asociar ese color con "no es un error, solo espera un momento".
+   * Un sonido suave y una vibración corta refuerzan que esto NO es ni un
+   * éxito ni un error real.
+   */
+  function mostrarDuplicadoInmediato_(mensaje, nombre) {
+    resultadoDiv.innerHTML =
+      '<div class="resultado duplicado">' +
+      (nombre ? '<div class="nombre">' + nombre + '</div>' : '') +
+      '⏳ ' + mensaje +
+      '</div>';
+    beep(440, 120); // tono corto y suave, distinto del beep de éxito/error
+    vibrar(50);
+  }
+
 
 
   function elegirModo(modo) {
@@ -678,13 +815,7 @@
 
   function cerrarApp() {
 
-    if (scannerRef) {
-
-      try {
-        scannerRef.stop();
-      } catch (e) {}
-
-    }
+    detenerCamara_();
 
     window.close();
   }
@@ -770,7 +901,9 @@
    * confirmar), dando sensación de demora. El ÚNICO sonido y destello
    * ahora es el de la confirmación FINAL (beepExito/beepError +
    * destelloExito/destelloError), disparados juntos desde
-   * mostrarResultado() cuando llega la respuesta del servidor.
+   * mostrarResultado() cuando llega la respuesta del servidor — o el aviso
+   * de duplicado (mostrarDuplicadoInmediato_), disparado al instante
+   * cuando el mismo QR se reescanea antes de tiempo.
    */
 
   /*
@@ -778,7 +911,6 @@
    * final — se llama desde mostrarResultado(), al mismo tiempo que suena
    * el beep y aparece el mensaje. Verde para éxito, rojo para error.
    */
-  const qrReaderDiv = document.getElementById('qr-reader');
 
   function destelloExito() {
     qrReaderDiv.classList.add('destello-exito');
@@ -793,16 +925,6 @@
       qrReaderDiv.classList.remove('destello-error');
     }, 400);
   }
-
-  /*
-   * Los reintentos del MISMO QR mientras ya se está procesando (la cámara
-   * lo sigue viendo mientras el alumno todavía está parado frente a ella)
-   * o dentro del cooldown post-registro son ESPERADOS y NORMALES — no un
-   * problema. Se ignoran en silencio dentro de marcarAsistencia() (ver más
-   * abajo): no hay sonido, no hay destello, no hay mensaje. El único
-   * indicador que sigue activo es el contador discreto "procesándose…"
-   * debajo de la cámara.
-   */
 
 
   // ============================================================
@@ -843,17 +965,16 @@
   // MOSTRAR RESULTADO
   // ============================================================
   //
-  // NUEVO parámetro "smsEstado": si el backend lo envía (campo
-  // "smsEstado" en la respuesta de registrarAsistencia), se muestra como
-  // una línea aparte debajo del mensaje principal, junto con la misma
-  // confirmación verde/roja — sin esperar a una segunda respuesta.
+  // "smsEstado": si el backend lo envía (campo "smsEstado" en la respuesta
+  // de registrarAsistencia), se muestra como una línea aparte debajo del
+  // mensaje principal, junto con la misma confirmación verde/roja — sin
+  // esperar a una segunda respuesta.
   //
-  // NUEVO parámetro "diagnosticoTiempos": objeto con los milisegundos que
-  // tardó cada paso del lado del servidor (ver Código.gs). Se muestra en
-  // una línea diminuta debajo de todo, solo mientras se está diagnosticando
-  // la demora de los escaneos — así no hay que entrar al panel de
-  // Ejecuciones de Apps Script, basta con leer la pantalla del celular
-  // después de escanear.
+  // "diagnosticoTiempos": objeto con los milisegundos que tardó cada paso
+  // del lado del servidor (ver Código.gs). Se muestra en una línea diminuta
+  // debajo de todo, solo mientras se está diagnosticando la demora de los
+  // escaneos — así no hay que entrar al panel de Ejecuciones de Apps
+  // Script, basta con leer la pantalla del celular después de escanear.
   // ============================================================
 
   function mostrarResultado(ok, texto, nombre, smsEstado, diagnosticoTiempos) {
@@ -905,6 +1026,14 @@
   // MARCAR ASISTENCIA — PUNTO DE ENTRADA (llamado por la cámara y por el
   // input manual). Ya NO envía la solicitud directamente: la encola, y es
   // la cola (procesarCola) la que respeta el límite de concurrencia.
+  //
+  // CAMBIO — MENSAJES DE DUPLICADO INMEDIATOS: antes, un reescaneo dentro
+  // del cooldown o mientras ya había un intento en curso se ignoraba en
+  // silencio (return sin avisar nada). Ahora, en ambos casos se muestra al
+  // instante un aviso ámbar de "duplicado" (mostrarDuplicadoInmediato_),
+  // con su propio sonido corto — así el auxiliar entiende de inmediato que
+  // el escaneo SÍ fue detectado, pero que ese alumno ya se registró o se
+  // está registrando, en vez de pensar que la cámara no reaccionó.
   // ============================================================
 
   function marcarAsistencia(idAlumnoRaw) {
@@ -912,14 +1041,27 @@
     const idAlumno = (idAlumnoRaw || '').trim();
     if (!idAlumno) return;
 
-    // ---- Duplicado por cooldown post-completado: ignorar en silencio ----
+    // Nombre para mostrar en los avisos, si ya está en la caché local;
+    // si no, se usa el ID/DNI tal cual.
+    const alumnoLocalParaNombre = buscarAlumnoEnCache(idAlumno);
+    const nombreParaAviso = alumnoLocalParaNombre ? alumnoLocalParaNombre.Nombre_Completo : idAlumno;
+
+    // ---- Duplicado por cooldown post-completado: avisar INMEDIATAMENTE ----
     const ahora = Date.now();
     if (ahora - (alumnosRecientes.get(idAlumno) || 0) < COOLDOWN_MS) {
+      mostrarDuplicadoInmediato_(
+        nombreParaAviso + ' ya tiene un movimiento registrado hace unos segundos.',
+        alumnoLocalParaNombre ? nombreParaAviso : null
+      );
       return;
     }
 
-    // ---- Ya hay un intento en curso (en memoria) O en la cola persistente para este alumno: ignorar en silencio ----
+    // ---- Ya hay un intento en curso (en memoria) O en la cola persistente para este alumno: avisar INMEDIATAMENTE ----
     if (alumnoTieneAlgoPendiente(idAlumno)) {
+      mostrarDuplicadoInmediato_(
+        nombreParaAviso + ' ya se está procesando, espera un momento.',
+        alumnoLocalParaNombre ? nombreParaAviso : null
+      );
       return;
     }
 
@@ -1107,7 +1249,10 @@
   //
   // NUNCA reintenta ante un resultado de negocio definitivo (vencido,
   // retirado, no registrado, muy reciente, o cualquier success:true) —
-  // esos ya son la respuesta final, reintentarlos no cambia nada.
+  // esos ya son la respuesta final, reintentarlos no cambia nada. Cuando
+  // el servidor responde con tipoError "muy_reciente", mostrarResultado()
+  // ya muestra ese rechazo de inmediato, con el mismo espíritu de "avisar
+  // rápido" que el aviso de duplicado del lado del cliente.
   //
   // Gracias al requestId de idempotencia (ver Código.gs), aunque este
   // reintento ocurra porque el cliente perdió la respuesta original y el
@@ -1266,6 +1411,11 @@
         const elegida =
           trasera || camaras[0];
 
+        // Se guarda el ID globalmente para que detenerCamara_()/
+        // iniciarCamara_() puedan reiniciar la cámara más adelante sin
+        // tener que volver a listar/elegir cámaras.
+        camaraDeviceId = elegida.id;
+
 
         // ------------------------------------------------------
         // CREAR ESCÁNER
@@ -1290,21 +1440,7 @@
             }
           },
 
-          {
-            /*
-             * 10 análisis por segundo.
-             *
-             * Puedes subirlo a 12 o 15 si tu celular
-             * tiene buen rendimiento.
-             */
-            fps: 10,
-
-            qrbox: {
-              width: 250,
-              height: 250
-            }
-
-          },
+          CONFIG_QR,
 
           /*
            * QR DETECTADO
@@ -1337,6 +1473,8 @@
         )
 
         .then(() => {
+
+          camaraActiva = true;
 
           estadoDiv.textContent =
             'Apunta la cámara al código QR…';

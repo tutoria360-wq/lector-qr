@@ -319,7 +319,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-09-25-duplicado-resaltado-camara-pausa
+  v2026-09-26-secuencia-anti-resultados-atrasados
 </p>
 
 <script>
@@ -515,6 +515,39 @@
    * lado del cliente.
    */
   const enProceso = new Map();
+
+  /*
+   * ============================================================
+   * SECUENCIA DE ESCANEO — evita que un resultado "atrasado" pise al actual
+   * ============================================================
+   * Cada vez que marcarAsistencia() arranca un escaneo NUEVO, se le asigna
+   * un número de secuencia (secuenciaEscaneo, incremental). Ese número
+   * viaja junto con la solicitud, y recién cuando la respuesta vuelve
+   * (mostrarResultado / mostrarDuplicadoInmediato_) se compara contra el
+   * valor ACTUAL de secuenciaEscaneo: si ya no coincide es porque el
+   * auxiliar escaneó algo más nuevo mientras esta respuesta viajaba, así
+   * que se descarta en silencio (ni pinta la pantalla ni suena).
+   *
+   * Esto es lo que arregla:
+   *  - Un aviso de "duplicado" o una confirmación vieja que reaparecía
+   *    encima de un escaneo más reciente.
+   *  - El sonido de un resultado atrasado sonando DESPUÉS del sonido del
+   *    escaneo actual (o al mismo tiempo, superponiéndose).
+   *  - El texto de "Enviando…/Reintentando…" quedándose pegado en pantalla
+   *    aunque ya se esté procesando otro alumno.
+   */
+  let secuenciaEscaneo = 0;
+
+  /**
+   * Actualiza estadoDiv SOLO si "seq" sigue siendo el escaneo más reciente.
+   * Si ya hay un escaneo más nuevo en curso, no toca la pantalla (evita que
+   * un reintento viejo siga "hablando" después de que el auxiliar ya pasó
+   * a otro alumno).
+   */
+  function actualizarEstadoSiVigente_(texto, seq) {
+    if (typeof seq === 'number' && seq !== secuenciaEscaneo) return;
+    estadoDiv.textContent = texto;
+  }
 
   /*
    * Cooldown POST-completado: evita que el mismo QR, todavía visible frente
@@ -821,7 +854,15 @@
    * se encontró (por ejemplo, un DNI mal escrito). En ese caso se muestra
    * el aviso igual, sin la ficha de datos.
    */
-  function mostrarDuplicadoInmediato_(mensaje, alumno) {
+  function mostrarDuplicadoInmediato_(mensaje, alumno, secuencia) {
+    // Mismo criterio que mostrarResultado(): si para cuando se ejecuta este
+    // aviso ya se disparó un escaneo más nuevo, se descarta en silencio
+    // (ni pinta, ni suena) — así un "duplicado" viejo nunca vuelve a
+    // aparecer encima de lo que el auxiliar ya está viendo.
+    if (typeof secuencia === 'number' && secuencia !== secuenciaEscaneo) {
+      return;
+    }
+
     const datosExtra = alumno
       ? '<div class="datos-alumno-dup">' +
           (alumno.DNI ? 'DNI: ' + alumno.DNI : '') +
@@ -1043,7 +1084,17 @@
   // Script, basta con leer la pantalla del celular después de escanear.
   // ============================================================
 
-  function mostrarResultado(ok, texto, nombre, smsEstado, diagnosticoTiempos) {
+  function mostrarResultado(ok, texto, nombre, smsEstado, diagnosticoTiempos, secuencia) {
+
+    // Si esta respuesta pertenece a un escaneo ANTERIOR y mientras viajaba
+    // ya se escaneó algo más nuevo, se descarta en silencio: no pinta la
+    // pantalla ni suena. Esto es lo que evita que una confirmación o un
+    // error "atrasado" (por ejemplo, el envío en segundo plano de un
+    // alumno escaneado hace unos segundos) se superponga o suene junto con
+    // el aviso de duplicado / la confirmación del escaneo actual.
+    if (typeof secuencia === 'number' && secuencia !== secuenciaEscaneo) {
+      return;
+    }
 
     let lineaDiag = '';
     if (diagnosticoTiempos) {
@@ -1105,6 +1156,13 @@
     const idAlumno = (idAlumnoRaw || '').trim();
     if (!idAlumno) return;
 
+    // Cada llamada a marcarAsistencia() es un escaneo NUEVO: se le asigna
+    // su propia secuencia. A partir de aquí, TODO aviso relacionado con
+    // este escaneo (duplicado, éxito, error) lleva este número — así, si
+    // llega tarde (después de que el auxiliar ya escaneó otra cosa),
+    // mostrarResultado()/mostrarDuplicadoInmediato_() lo descartan solos.
+    const miSecuencia = ++secuenciaEscaneo;
+
     // Objeto completo del alumno (si está en la caché local), para poder
     // mostrar su ficha completa en los avisos de duplicado.
     const alumnoLocalParaNombre = buscarAlumnoEnCache(idAlumno);
@@ -1114,7 +1172,8 @@
     if (ahora - (alumnosRecientes.get(idAlumno) || 0) < COOLDOWN_MS) {
       mostrarDuplicadoInmediato_(
         'Ya tiene un movimiento registrado hace unos segundos.',
-        alumnoLocalParaNombre
+        alumnoLocalParaNombre,
+        miSecuencia
       );
       return;
     }
@@ -1123,7 +1182,8 @@
     if (alumnoTieneAlgoPendiente(idAlumno)) {
       mostrarDuplicadoInmediato_(
         'Ya se está procesando, espera un momento.',
-        alumnoLocalParaNombre
+        alumnoLocalParaNombre,
+        miSecuencia
       );
       return;
     }
@@ -1132,7 +1192,7 @@
       !URL_ENVIO ||
       URL_ENVIO.indexOf('PEGA-AQUI') > -1
     ) {
-      mostrarResultado(false, 'Falta configurar la URL del proxy (URL_PROXY) en el lector.');
+      mostrarResultado(false, 'Falta configurar la URL del proxy (URL_PROXY) en el lector.', null, null, null, miSecuencia);
       return;
     }
 
@@ -1150,13 +1210,13 @@
         // lo dejaría pasar, así que ni siquiera hace falta gastar una
         // llamada de red para esto — confirmación instantánea.
         alumnosRecientes.set(idAlumno, ahora);
-        mostrarResultado(false, alumnoLocal.Nombre_Completo + ' está RETIRADO. No se puede registrar asistencia.', alumnoLocal.Nombre_Completo);
+        mostrarResultado(false, alumnoLocal.Nombre_Completo + ' está RETIRADO. No se puede registrar asistencia.', alumnoLocal.Nombre_Completo, null, null, miSecuencia);
         return;
       }
 
       if (alumnoEstaVencido_(alumnoLocal)) {
         alumnosRecientes.set(idAlumno, ahora);
-        mostrarResultado(false, 'Matrícula VENCIDA (' + alumnoLocal.Fecha_Vencimiento + '). ' + alumnoLocal.Nombre_Completo + ' debe renovar.', alumnoLocal.Nombre_Completo);
+        mostrarResultado(false, 'Matrícula VENCIDA (' + alumnoLocal.Fecha_Vencimiento + '). ' + alumnoLocal.Nombre_Completo + ' debe renovar.', alumnoLocal.Nombre_Completo, null, null, miSecuencia);
         return;
       }
 
@@ -1170,7 +1230,9 @@
         true,
         alumnoLocal.Nombre_Completo + ' — ' + modoActual + ' registrada (' + new Date().toLocaleTimeString('es-PE', { hour: 'numeric', minute: '2-digit' }) + ')',
         alumnoLocal.Nombre_Completo,
-        modoActual === 'Entrada' ? '📩 Notificación en camino…' : null
+        modoActual === 'Entrada' ? '📩 Notificación en camino…' : null,
+        null,
+        miSecuencia
       );
 
       enviarRegistroEnSegundoPlano_(idAlumno, modoActual, requestId, alumnoLocal.Nombre_Completo);
@@ -1191,7 +1253,7 @@
     // no hay base local para decidir con confianza.
     // ============================================================
     const requestId = idAlumno + '_' + ahora + '_' + Math.random().toString(36).slice(2, 8);
-    const entrada = { requestId: requestId, intentos: 0 };
+    const entrada = { requestId: requestId, intentos: 0, seq: miSecuencia };
     enProceso.set(idAlumno, entrada);
     actualizarContadorPendientes();
 
@@ -1296,7 +1358,7 @@
     }
     alumnosRecientes.set(idAlumno, Date.now());
     actualizarContadorPendientes();
-    estadoDiv.textContent = 'Apunta la cámara al código QR…';
+    actualizarEstadoSiVigente_('Apunta la cámara al código QR…', entrada.seq);
   }
 
 
@@ -1327,7 +1389,7 @@
 
     entrada.intentos++;
 
-    estadoDiv.textContent = 'Enviando ' + modoActual + '…';
+    actualizarEstadoSiVigente_('Enviando ' + modoActual + '…', entrada.seq);
 
     const url =
       URL_ENVIO +
@@ -1357,7 +1419,7 @@
           /tiempo de espera|bloqueo/i.test(data.message);
 
         if (esErrorDeCandado && entrada.intentos < MAX_INTENTOS) {
-          estadoDiv.textContent = 'Reintentando ' + idAlumno + '…';
+          actualizarEstadoSiVigente_('Reintentando ' + idAlumno + '…', entrada.seq);
           return ejecutarConReintentos(idAlumno, entrada); // mismo requestId
         }
 
@@ -1374,7 +1436,8 @@
           data.message || 'Registro procesado.',
           data.alumno ? data.alumno.Nombre_Completo : null,
           data.smsEstado || null,
-          diag
+          diag,
+          entrada.seq
         );
       })
 
@@ -1384,7 +1447,7 @@
         const fueTimeout = err && err.name === 'AbortError';
 
         if (entrada.intentos < MAX_INTENTOS) {
-          estadoDiv.textContent = 'Reintentando ' + idAlumno + '…';
+          actualizarEstadoSiVigente_('Reintentando ' + idAlumno + '…', entrada.seq);
           return ejecutarConReintentos(idAlumno, entrada); // mismo requestId
         }
 
@@ -1392,7 +1455,11 @@
           false,
           fueTimeout
             ? 'El servidor tardó demasiado en responder. Intenta escanear de nuevo.'
-            : 'No se pudo conectar con el servidor: ' + err.message
+            : 'No se pudo conectar con el servidor: ' + err.message,
+          null,
+          null,
+          null,
+          entrada.seq
         );
       });
   }

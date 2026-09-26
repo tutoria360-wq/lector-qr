@@ -319,7 +319,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-09-26-secuencia-anti-resultados-atrasados
+  v2026-09-26-cooldown-120s-igual-al-servidor
 </p>
 
 <script>
@@ -555,7 +555,39 @@
    * segundo intento inmediato.
    */
   const alumnosRecientes = new Map();
-  const COOLDOWN_MS = 1000;
+
+  /*
+   * COOLDOWN_DUPLICADO_MS — DEBE COINCIDIR con la ventana anti-duplicados
+   * real del servidor (ver Código.gs, función registrarAsistencia,
+   * "if (diffSegundos < 120)"): el servidor rechaza un nuevo movimiento del
+   * MISMO alumno si pasaron menos de 120 segundos (2 minutos) desde el
+   * anterior.
+   *
+   * Antes este valor era de solo 1 segundo, mucho más corto que el del
+   * servidor. Eso causaba el bug de los mensajes "Revisar [alumno]: ya
+   * tiene un movimiento..." apilándose uno tras otro: el celular
+   * confirmaba "éxito" de inmediato (porque su propio cooldown de 1s ya
+   * había pasado), pero el envío real en segundo plano SIEMPRE terminaba
+   * rechazado por el servidor (porque su ventana de 120s seguía activa), y
+   * cada rechazo agregaba una alerta nueva de corrección — una por cada
+   * reescaneo.
+   *
+   * Con los dos cooldowns alineados a 120 segundos, un reescaneo dentro de
+   * esa ventana muestra de inmediato el aviso "DUPLICADO" (badge ámbar,
+   * un solo sonido) en vez de la falsa confirmación seguida de la
+   * corrección del servidor.
+   */
+  const COOLDOWN_DUPLICADO_MS = 120000;
+
+  /*
+   * PAUSA_CAMARA_MS — pausa BREVE de la decodificación de la cámara justo
+   * después de leer un QR, para que si el código sigue frente al lente no
+   * se vuelva a leer de inmediato. Es un concepto TOTALMENTE DISTINTO al
+   * cooldown de duplicado de arriba: aquí solo se trata de darle un
+   * respiro a la cámara, no de la regla de negocio de "no repetir el
+   * mismo movimiento antes de 2 minutos". Debe seguir siendo corta.
+   */
+  const PAUSA_CAMARA_MS = 1500;
 
   /*
    * COLA CON CONCURRENCIA LIMITADA A 2.
@@ -833,8 +865,26 @@
     return !!(data && data.tipoError && ['vencido', 'retirado', 'no_registrado', 'muy_reciente'].indexOf(data.tipoError) > -1);
   }
 
+  /*
+   * Recuerda la última corrección mostrada por "alumno + mensaje", para no
+   * apilar el mismo aviso dos veces seguidas si por alguna razón el
+   * servidor lo rechaza más de una vez en poco tiempo (defensa adicional;
+   * el arreglo de fondo es que COOLDOWN_DUPLICADO_MS ya coincide con la
+   * ventana anti-duplicados real del servidor, así que esto casi nunca
+   * debería activarse).
+   */
+  const ultimasCorreccionesMostradas = new Map(); // "alumno|mensaje" -> timestamp
+  const VENTANA_SIN_REPETIR_CORRECCION_MS = 30000; // 30 segundos
+
   /** Alerta de corrección: se muestra cuando la validación local decía "ok" pero el servidor, al confirmar de verdad, rechazó el registro. */
   function mostrarAlertaCorreccion_(nombreOId, mensajeServidor) {
+    const clave = nombreOId + '|' + mensajeServidor;
+    const ahora = Date.now();
+    if (ahora - (ultimasCorreccionesMostradas.get(clave) || 0) < VENTANA_SIN_REPETIR_CORRECCION_MS) {
+      return; // la misma corrección ya se mostró hace muy poco: no se apila de nuevo
+    }
+    ultimasCorreccionesMostradas.set(clave, ahora);
+
     const div = document.createElement('div');
     div.className = 'resultado duplicado';
     div.innerHTML = '⚠️ <strong>Revisar ' + nombreOId + ':</strong> ' + mensajeServidor;
@@ -1169,7 +1219,7 @@
 
     // ---- Duplicado por cooldown post-completado: avisar INMEDIATAMENTE ----
     const ahora = Date.now();
-    if (ahora - (alumnosRecientes.get(idAlumno) || 0) < COOLDOWN_MS) {
+    if (ahora - (alumnosRecientes.get(idAlumno) || 0) < COOLDOWN_DUPLICADO_MS) {
       mostrarDuplicadoInmediato_(
         'Ya tiene un movimiento registrado hace unos segundos.',
         alumnoLocalParaNombre,
@@ -1585,7 +1635,7 @@
             /*
              * PAUSA BREVE DE LA CÁMARA (NUEVO):
              * Justo después de procesar la lectura, se pausa la
-             * decodificación un par de segundos (COOLDOWN_MS). Así, si el
+             * decodificación un par de segundos (PAUSA_CAMARA_MS). Así, si el
              * QR sigue frente al lente, no se vuelve a leer de inmediato
              * y no dispara un "duplicado" encima del mensaje de éxito que
              * recién apareció — el auxiliar alcanza a verlo y escucharlo
@@ -1601,7 +1651,7 @@
                 if (scannerRef && camaraActiva && !document.hidden) {
                   try { scannerRef.resume(); } catch (e) {}
                 }
-              }, COOLDOWN_MS);
+              }, PAUSA_CAMARA_MS);
             }
 
           },

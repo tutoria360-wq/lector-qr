@@ -101,7 +101,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-10-01-cache-3h-boton-actualizar
+  v2026-10-02-cache-3h-facingmode-trasera
 </p>
 
 <script>
@@ -136,8 +136,7 @@
   const CONFIG_QR = {
     fps: 8,
     qrbox: { width: 250, height: 250 },
-    disableFlip: true,
-    videoConstraints: { width: { ideal: 640 }, height: { ideal: 480 } }
+    disableFlip: true
   };
 
   function detenerCamara_() {
@@ -152,11 +151,11 @@
   }
 
   function iniciarCamara_() {
-    if (!scannerRef || !camaraDeviceId || camaraActiva) return;
+    if (!scannerRef || camaraActiva) return;
     qrReaderDiv.classList.remove('pausada');
     estadoDiv.textContent = 'Reactivando cámara…';
     scannerRef.start(
-      { deviceId: { exact: camaraDeviceId } },
+      { facingMode: 'environment' },
       CONFIG_QR,
       decodedText => marcarAsistencia(decodedText),
       () => {}
@@ -905,7 +904,7 @@
         scannerRef = scanner;
 
         scanner.start(
-          { deviceId: { exact: elegida.id } },
+          { facingMode: 'environment' }, // cámara trasera, sin depender del nombre de la cámara
           CONFIG_QR,
 
           decodedText => {

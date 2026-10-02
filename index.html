@@ -3,15 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-
 <title>Lector QR — Asistencia</title>
 
-<!-- ===== PWA ===== -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#0f172a">
-
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
-
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Lector QR">
@@ -20,237 +16,60 @@
 <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
 <style>
-  body {
-    font-family: system-ui, sans-serif;
-    margin: 0;
-    padding: 16px;
-    background: #0f172a;
-    color: #e2e8f0;
-  }
-
-  h3 {
-    text-align: center;
-    font-size: 16px;
-    margin: 0 0 14px;
-  }
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 16px; background: #0f172a; color: #e2e8f0; }
+  h3 { text-align: center; font-size: 16px; margin: 0 0 14px; }
 
   #qr-reader {
-    width: 100%;
-    max-width: 420px;
-    margin: 0 auto;
-    border-radius: 12px;
-    overflow: hidden;
-    border: 4px solid transparent;
-    transition: border-color 0.05s ease-out;
+    width: 100%; max-width: 420px; margin: 0 auto; border-radius: 12px; overflow: hidden;
+    border: 4px solid transparent; transition: border-color 0.05s ease-out;
   }
+  #qr-reader.destello-exito { border-color: #22c55e; box-shadow: 0 0 24px 4px rgba(34, 197, 94, 0.7); }
+  #qr-reader.destello-error { border-color: #ef4444; box-shadow: 0 0 24px 4px rgba(239, 68, 68, 0.7); }
+  #qr-reader.pausada { border-color: #f59e0b; box-shadow: 0 0 16px 2px rgba(245, 158, 11, 0.5); }
 
-  /*
-   * Destello del recuadro de la cámara, SINCRONIZADO con la confirmación
-   * final (mensaje + sonido) — no con la simple detección del QR. Verde
-   * para éxito, rojo para error, igual que los colores de "resultado".
-   */
-  #qr-reader.destello-exito {
-    border-color: #22c55e;
-    box-shadow: 0 0 24px 4px rgba(34, 197, 94, 0.7);
-  }
+  .estado { text-align: center; margin-top: 14px; font-size: 14px; color: #94a3b8; }
+  .pendientes { text-align: center; margin-top: 4px; font-size: 12px; color: #64748b; min-height: 16px; }
 
-  #qr-reader.destello-error {
-    border-color: #ef4444;
-    box-shadow: 0 0 24px 4px rgba(239, 68, 68, 0.7);
-  }
+  .resultado { border-radius: 10px; padding: 16px; font-size: 15px; margin-top: 14px; text-align: center; }
+  .ok { background: #052e16; color: #bbf7d0; border: 1px solid #14532d; }
+  .error { background: #450a0a; color: #fecaca; border: 1px solid #7f1d1d; }
+  .duplicado { background: #451a03; color: #fde68a; border: 1px solid #92400e; }
 
-  /*
-   * NUEVO — destello de "cámara en pausa" (apagado automático por
-   * pantalla oculta). Color ámbar, distinto de verde/rojo, para que se
-   * entienda que es un estado normal (no un error) cuando se reactive.
-   */
-  #qr-reader.pausada {
-    border-color: #f59e0b;
-    box-shadow: 0 0 16px 2px rgba(245, 158, 11, 0.5);
-  }
-
-  .estado {
-    text-align: center;
-    margin-top: 14px;
-    font-size: 14px;
-    color: #94a3b8;
-  }
-
-  .pendientes {
-    text-align: center;
-    margin-top: 4px;
-    font-size: 12px;
-    color: #64748b;
-    min-height: 16px;
-  }
-
-  .resultado {
-    border-radius: 10px;
-    padding: 16px;
-    font-size: 15px;
-    margin-top: 14px;
-    text-align: center;
-  }
-
-  .ok {
-    background: #052e16;
-    color: #bbf7d0;
-    border: 1px solid #14532d;
-  }
-
-  .error {
-    background: #450a0a;
-    color: #fecaca;
-    border: 1px solid #7f1d1d;
-  }
-
-  /*
-   * Estilo de alerta para "duplicado / ya en vuelo / en proceso". Distinto
-   * de ok (verde) y error (rojo) para que el auxiliar entienda de un
-   * vistazo que NO es un error real del servidor, sino que ese QR ya se
-   * está procesando, se acaba de leer hace un instante, o el servidor lo
-   * rechazó por ser un reescaneo demasiado reciente.
-   */
-  .duplicado {
-    background: #451a03;
-    color: #fde68a;
-    border: 1px solid #92400e;
-  }
-
-  /*
-   * NUEVO — badge "DUPLICADO" bien resaltante (pulsante) arriba del
-   * mensaje, para que se note de inmediato incluso sin leer el texto.
-   */
   .badge-duplicado {
-    display: inline-block;
-    background: #f59e0b;
-    color: #451a03;
-    font-weight: 800;
-    font-size: 13px;
-    letter-spacing: 1px;
-    padding: 4px 14px;
-    border-radius: 999px;
-    margin-bottom: 8px;
+    display: inline-block; background: #f59e0b; color: #451a03; font-weight: 800; font-size: 13px;
+    letter-spacing: 1px; padding: 4px 14px; border-radius: 999px; margin-bottom: 8px;
     animation: pulso-duplicado 1s ease-in-out infinite;
   }
+  @keyframes pulso-duplicado { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+  .datos-alumno-dup { font-size: 12px; color: #fcd34d; margin-bottom: 6px; }
+  .mensaje-duplicado { font-size: 14px; }
+  .nombre { font-weight: 700; font-size: 17px; margin-bottom: 4px; }
+  .sms-linea { margin-top: 8px; font-size: 12px; opacity: 0.85; }
 
-  @keyframes pulso-duplicado {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.55; }
-  }
-
-  /* NUEVO — línea con DNI / modalidad / grupo del alumno en el aviso de duplicado. */
-  .datos-alumno-dup {
-    font-size: 12px;
-    color: #fcd34d;
-    margin-bottom: 6px;
-  }
-
-  .mensaje-duplicado {
-    font-size: 14px;
-  }
-
-  .nombre {
-    font-weight: 700;
-    font-size: 17px;
-    margin-bottom: 4px;
-  }
-
-  /*
-   * Línea para mostrar el estado del SMS junto con la confirmación de
-   * asistencia (campo "smsEstado" que devuelve registrarAsistencia).
-   */
-  .sms-linea {
-    margin-top: 8px;
-    font-size: 12px;
-    opacity: 0.85;
-  }
-
-  input,
-  button {
-    font-size: 15px;
-  }
-
+  input, button { font-size: 15px; }
   #inputManual {
-    width: 100%;
-    box-sizing: border-box;
-    padding: 10px;
-    border-radius: 8px;
-    border: 1px solid #334155;
-    background: #1e293b;
-    color: #e2e8f0;
-    margin-top: 6px;
+    width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px;
+    border: 1px solid #334155; background: #1e293b; color: #e2e8f0; margin-top: 6px;
   }
+  .fila { display: flex; gap: 8px; margin-top: 6px; }
+  .fila input { flex: 1; }
+  button { padding: 10px 14px; border: none; border-radius: 8px; background: #334155; color: #fff; font-weight: 600; cursor: pointer; }
+  button:hover { background: #475569; }
+  button:disabled { opacity: 0.6; cursor: default; }
+  label { font-size: 13px; color: #94a3b8; }
 
-  .fila {
-    display: flex;
-    gap: 8px;
-    margin-top: 6px;
-  }
+  .toggle { display: flex; gap: 8px; margin: 0 auto 14px; max-width: 420px; }
+  .toggle button { flex: 1; padding: 12px; border-radius: 10px; background: #1e293b; border: 2px solid #334155; font-size: 16px; }
+  .toggle button.activo-entrada { background: #052e16; border-color: #16a34a; color: #bbf7d0; }
+  .toggle button.activo-salida { background: #450a0a; border-color: #dc2626; color: #fecaca; }
+  .toggle button.btn-cerrar { flex: 0 0 auto; padding: 12px 14px; font-size: 14px; color: #94a3b8; }
+  .toggle button.btn-cerrar:hover { background: #334155; color: #fecaca; border-color: #7f1d1d; }
 
-  .fila input {
-    flex: 1;
-  }
-
-  button {
-    padding: 10px 14px;
-    border: none;
-    border-radius: 8px;
-    background: #334155;
-    color: #fff;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  button:hover {
-    background: #475569;
-  }
-
-  label {
-    font-size: 13px;
-    color: #94a3b8;
-  }
-
-  .toggle {
-    display: flex;
-    gap: 8px;
-    margin: 0 auto 14px;
-    max-width: 420px;
-  }
-
-  .toggle button {
-    flex: 1;
-    padding: 12px;
-    border-radius: 10px;
-    background: #1e293b;
-    border: 2px solid #334155;
-    font-size: 16px;
-  }
-
-  .toggle button.activo-entrada {
-    background: #052e16;
-    border-color: #16a34a;
-    color: #bbf7d0;
-  }
-
-  .toggle button.activo-salida {
-    background: #450a0a;
-    border-color: #dc2626;
-    color: #fecaca;
-  }
-
-  .toggle button.btn-cerrar {
-    flex: 0 0 auto;
-    padding: 12px 14px;
-    font-size: 14px;
-    color: #94a3b8;
-  }
-
-  .toggle button.btn-cerrar:hover {
-    background: #334155;
-    color: #fecaca;
-    border-color: #7f1d1d;
-  }
+  /* Bloque "Actualizar lista" */
+  .cache-bloque { max-width: 420px; margin: 14px auto 0; text-align: center; }
+  .cache-bloque button { background: #1e293b; border: 1px solid #334155; font-size: 13px; padding: 8px 14px; }
+  .cache-bloque button:hover { background: #334155; }
+  .cache-info { font-size: 11px; color: #64748b; margin-top: 6px; }
 </style>
 </head>
 
@@ -259,196 +78,83 @@
 <h3>📷 Lector QR — Control de Asistencia</h3>
 
 <div class="toggle">
-
-  <button
-    id="btnModoEntrada"
-    onclick="elegirModo('Entrada')">
-    ⬆️ Entrada
-  </button>
-
-  <button
-    id="btnModoSalida"
-    onclick="elegirModo('Salida')">
-    ⬇️ Salida
-  </button>
-
-  <button
-    class="btn-cerrar"
-    onclick="cerrarApp()"
-    title="Cerrar la aplicación">
-    Salir
-  </button>
-
+  <button id="btnModoEntrada" onclick="elegirModo('Entrada')">⬆️ Entrada</button>
+  <button id="btnModoSalida" onclick="elegirModo('Salida')">⬇️ Salida</button>
+  <button class="btn-cerrar" onclick="cerrarApp()" title="Cerrar la aplicación">Salir</button>
 </div>
 
 <div id="qr-reader"></div>
-
-<div id="estado" class="estado">
-  Solicitando acceso a la cámara…
-</div>
-
+<div id="estado" class="estado">Solicitando acceso a la cámara…</div>
 <div id="pendientes" class="pendientes"></div>
-
 <div id="resultado"></div>
 
 <label>O ingresar ID manualmente:</label>
-
 <div class="fila">
+  <input id="inputManual" placeholder="DNI del alumno"
+    onkeydown="if(event.key==='Enter'){ marcarAsistencia(this.value); this.value=''; }">
+  <button onclick="marcarAsistencia(document.getElementById('inputManual').value); document.getElementById('inputManual').value='';">Marcar</button>
+</div>
 
-  <input
-    id="inputManual"
-    placeholder="DNI del alumno"
-    onkeydown="
-      if(event.key==='Enter'){
-        marcarAsistencia(this.value);
-        this.value='';
-      }
-    "
-  >
-
-  <button
-    onclick="
-      marcarAsistencia(
-        document.getElementById('inputManual').value
-      );
-      document.getElementById('inputManual').value='';
-    ">
-    Marcar
-  </button>
-
+<div class="cache-bloque">
+  <button id="btnActualizarLista" onclick="actualizarListaManual()">🔄 Actualizar lista</button>
+  <div id="cacheInfo" class="cache-info"></div>
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-09-26-cooldown-120s-igual-al-servidor
+  v2026-10-01-cache-3h-boton-actualizar
 </p>
 
 <script>
 
   // ============================================================
-  // URL DE APPS SCRIPT (directa) Y URL DEL PROXY (Cloudflare Worker)
+  // URLS
   // ============================================================
-  //
-  // URL_APPS_SCRIPT se deja aquí solo como referencia/respaldo (por si
-  // algún día quieres volver a llamar directo, o comparar tiempos).
-  // La petición real ahora se manda a URL_PROXY: un Cloudflare Worker que
-  // reenvía la llamada a Apps Script por SU PROPIA conexión (rápida) y le
-  // devuelve al celular una sola respuesta ya resuelta, en vez de que el
-  // celular tenga que seguir él mismo la redirección que Apps Script
-  // siempre hace. Ver cloudflare-worker-proxy.js para el código del Worker
-  // y las instrucciones de despliegue.
-  //
-  // ⚠️ Reemplaza URL_PROXY por la URL que te dio Cloudflare al desplegar
-  // el Worker (algo como https://asistencia-proxy.TU-USUARIO.workers.dev).
-
   const URL_APPS_SCRIPT =
     'https://script.google.com/macros/s/AKfycbydoOxtfEKVxvqT7OTwxmtUXlWTBsTi41sVE_LJFFC23EMwfMMzohBoxCsqIC8-tNXh/exec';
 
-  const URL_PROXY =
-    'https://asistencia-proxy.tutoria360.workers.dev/';
+  const URL_PROXY = 'https://asistencia-proxy.tutoria360.workers.dev/';
 
-  // Esta es la URL que efectivamente se usa para cada escaneo. Si todavía
-  // no desplegaste el Worker, cambia esto temporalmente a URL_APPS_SCRIPT
-  // para seguir usando el sistema mientras tanto.
+  // URL que se usa realmente (cambia a URL_APPS_SCRIPT si necesitas saltarte el proxy).
   const URL_ENVIO = URL_PROXY;
-
 
   // ============================================================
   // VARIABLES
   // ============================================================
-
-  const estadoDiv =
-    document.getElementById('estado');
-
-  const resultadoDiv =
-    document.getElementById('resultado');
-
-  const pendientesDiv =
-    document.getElementById('pendientes');
-
-  const qrReaderDiv =
-    document.getElementById('qr-reader');
+  const estadoDiv = document.getElementById('estado');
+  const resultadoDiv = document.getElementById('resultado');
+  const pendientesDiv = document.getElementById('pendientes');
+  const qrReaderDiv = document.getElementById('qr-reader');
 
   let scannerRef = null;
-
   let modoActual = 'Entrada';
 
-  /*
-   * ============================================================
-   * APAGADO AUTOMÁTICO DE CÁMARA
-   * ============================================================
-   *
-   * camaraDeviceId: el ID de la cámara elegida (trasera si existe), guardado
-   * una sola vez al iniciar por primera vez, para poder REINICIAR la cámara
-   * más adelante sin tener que volver a listar/elegir cámaras cada vez.
-   *
-   * camaraActiva: true mientras el stream de la cámara está efectivamente
-   * corriendo. Se usa para no intentar detener una cámara ya detenida ni
-   * iniciar una ya iniciada (evita errores y llamadas redundantes de
-   * html5-qrcode).
-   *
-   * pausadoPorCooldown: true mientras la cámara está en una pausa breve
-   * (scanner.pause()) justo después de una lectura, para que el mismo QR
-   * — si sigue frente al lente — no se vuelva a decodificar de inmediato
-   * y dispare un aviso de "duplicado" encima del mensaje de éxito. Es
-   * independiente de camaraActiva/stop()-start(): aquí el stream de video
-   * sigue vivo, solo se deja de decodificar un momento.
-   *
-   * CONFIG_QR: configuración de fps/qrbox reutilizada tanto en el primer
-   * arranque como en cada reinicio automático, para que el comportamiento
-   * de escaneo sea siempre el mismo.
-   *
-   * Cuándo se apaga sola la cámara (stop completo):
-   *  - El usuario bloquea la pantalla del celular o cambia a otra app
-   *    (evento "visibilitychange" con document.hidden = true).
-   *  - El usuario navega fuera de la página o la cierra (evento "pagehide").
-   * Cuándo se reactiva sola:
-   *  - El usuario vuelve a la pestaña/app (document.hidden = false).
-   * Esto evita que la cámara quede encendida consumiendo batería mientras
-   * el celular está guardado o la app en segundo plano sin usarse.
-   */
+  // Cámara: se apaga sola con la pantalla oculta y se reactiva al volver.
   let camaraDeviceId = null;
   let camaraActiva = false;
   let pausadoPorCooldown = false;
 
   const CONFIG_QR = {
-    fps: 10,
-    qrbox: { width: 250, height: 250 }
+    fps: 8,
+    qrbox: { width: 250, height: 250 },
+    disableFlip: true,
+    videoConstraints: { width: { ideal: 640 }, height: { ideal: 480 } }
   };
 
-  /**
-   * Detiene la cámara si está corriendo. Segura de llamar aunque la cámara
-   * ya esté detenida o el scanner no exista todavía (no hace nada en ese
-   * caso). Deja un mensaje de estado claro para que el auxiliar entienda
-   * que es una pausa normal, no un error.
-   */
   function detenerCamara_() {
     if (!scannerRef || !camaraActiva) return;
-
     scannerRef.stop()
       .then(() => {
         camaraActiva = false;
         qrReaderDiv.classList.add('pausada');
         estadoDiv.textContent = 'Cámara en pausa (pantalla oculta o app en segundo plano)…';
       })
-      .catch(() => {
-        // Si el stop() falla por alguna razón, igual se asume detenida
-        // para no bloquear un futuro reinicio.
-        camaraActiva = false;
-      });
+      .catch(() => { camaraActiva = false; });
   }
 
-  /**
-   * Reinicia la cámara si estaba detenida por el apagado automático.
-   * Segura de llamar aunque la cámara ya esté activa o el scanner/deviceId
-   * todavía no existan (por ejemplo, si la página recién está cargando y
-   * el primer arranque de la cámara todavía no terminó).
-   */
   function iniciarCamara_() {
     if (!scannerRef || !camaraDeviceId || camaraActiva) return;
-
     qrReaderDiv.classList.remove('pausada');
     estadoDiv.textContent = 'Reactivando cámara…';
-
     scannerRef.start(
       { deviceId: { exact: camaraDeviceId } },
       CONFIG_QR,
@@ -461,199 +167,65 @@
       })
       .catch(err => {
         estadoDiv.innerHTML =
-          '<div class="resultado error">No se pudo reactivar la cámara: ' +
-          ((err && err.message) || err) + '</div>';
+          '<div class="resultado error">No se pudo reactivar la cámara: ' + ((err && err.message) || err) + '</div>';
       });
   }
 
-  // Pantalla oculta (bloqueo, cambio de app, minimizado) => pausa la
-  // cámara. Pantalla visible de nuevo => la reactiva sola.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
       detenerCamara_();
     } else {
       iniciarCamara_();
+      refrescarCacheSiCaduco_(); // solo descarga si ya pasaron 3 horas
+      actualizarInfoCache_();
     }
   });
 
-  // Si el usuario navega fuera de la página o la cierra, se detiene la
-  // cámara también (buena práctica, aunque el navegador suele liberar el
-  // stream solo al cerrar la pestaña).
-  window.addEventListener('pagehide', () => {
-    detenerCamara_();
-  });
+  window.addEventListener('pagehide', () => { detenerCamara_(); });
 
-
-  /*
-   * ============================================================
-   * ESTADO DE SOLICITUDES
-   * ============================================================
-   *
-   * enProceso: Map<idAlumno, entrada> donde "entrada" es un objeto único
-   * { requestId, intentos } creado UNA vez por intento de escaneo lógico
-   * (incluyendo todos sus reintentos automáticos, que reutilizan el MISMO
-   * objeto "entrada" y el MISMO requestId — nunca se genera uno nuevo para
-   * un reintento).
-   *
-   * Por qué esto es seguro (a diferencia de un Set simple):
-   * - Mientras enProceso.has(idAlumno) sea true, NINGÚN escaneo nuevo del
-   *   mismo alumno puede crear una segunda entrada — así que nunca puede
-   *   existir más de UN objeto "entrada" activo por alumno a la vez.
-   * - Al finalizar (éxito o error definitivo), solo se borra la entrada del
-   *   mapa si la que sigue ahí es EXACTAMENTE el mismo objeto que se está
-   *   finalizando (comparación por referencia con ===, no por valor). Como
-   *   solo puede existir un objeto a la vez por alumno, esto es una
-   *   garantía estructural, no una casualidad de temporización: una
-   *   solicitud vieja JAMÁS puede borrar la protección de una más nueva.
-   *
-   * requestId: identificador único de idempotencia enviado al servidor.
-   * El backend (Código.gs) lo usa para detectar si esta misma solicitud
-   * YA se procesó en un intento anterior (por ejemplo, si el navegador
-   * perdió la respuesta por un timeout pero Apps Script sí completó el
-   * registro) y evita escribir la fila dos veces. Esto es lo que elimina
-   * el riesgo real de duplicados por reintento, no solo la protección del
-   * lado del cliente.
-   */
+  // ============================================================
+  // ESTADO DE SOLICITUDES
+  // ============================================================
+  // enProceso: un solo objeto "entrada" activo por alumno; se borra por referencia (===).
   const enProceso = new Map();
 
-  /*
-   * ============================================================
-   * SECUENCIA DE ESCANEO — evita que un resultado "atrasado" pise al actual
-   * ============================================================
-   * Cada vez que marcarAsistencia() arranca un escaneo NUEVO, se le asigna
-   * un número de secuencia (secuenciaEscaneo, incremental). Ese número
-   * viaja junto con la solicitud, y recién cuando la respuesta vuelve
-   * (mostrarResultado / mostrarDuplicadoInmediato_) se compara contra el
-   * valor ACTUAL de secuenciaEscaneo: si ya no coincide es porque el
-   * auxiliar escaneó algo más nuevo mientras esta respuesta viajaba, así
-   * que se descarta en silencio (ni pinta la pantalla ni suena).
-   *
-   * Esto es lo que arregla:
-   *  - Un aviso de "duplicado" o una confirmación vieja que reaparecía
-   *    encima de un escaneo más reciente.
-   *  - El sonido de un resultado atrasado sonando DESPUÉS del sonido del
-   *    escaneo actual (o al mismo tiempo, superponiéndose).
-   *  - El texto de "Enviando…/Reintentando…" quedándose pegado en pantalla
-   *    aunque ya se esté procesando otro alumno.
-   */
+  // Secuencia de escaneo: descarta respuestas atrasadas que ya no corresponden al escaneo actual.
   let secuenciaEscaneo = 0;
 
-  /**
-   * Actualiza estadoDiv SOLO si "seq" sigue siendo el escaneo más reciente.
-   * Si ya hay un escaneo más nuevo en curso, no toca la pantalla (evita que
-   * un reintento viejo siga "hablando" después de que el auxiliar ya pasó
-   * a otro alumno).
-   */
   function actualizarEstadoSiVigente_(texto, seq) {
     if (typeof seq === 'number' && seq !== secuenciaEscaneo) return;
     estadoDiv.textContent = texto;
   }
 
-  /*
-   * Cooldown POST-completado: evita que el mismo QR, todavía visible frente
-   * a la cámara justo después de completarse su registro, dispare un
-   * segundo intento inmediato.
-   */
   const alumnosRecientes = new Map();
 
-  /*
-   * COOLDOWN_DUPLICADO_MS — DEBE COINCIDIR con la ventana anti-duplicados
-   * real del servidor (ver Código.gs, función registrarAsistencia,
-   * "if (diffSegundos < 120)"): el servidor rechaza un nuevo movimiento del
-   * MISMO alumno si pasaron menos de 120 segundos (2 minutos) desde el
-   * anterior.
-   *
-   * Antes este valor era de solo 1 segundo, mucho más corto que el del
-   * servidor. Eso causaba el bug de los mensajes "Revisar [alumno]: ya
-   * tiene un movimiento..." apilándose uno tras otro: el celular
-   * confirmaba "éxito" de inmediato (porque su propio cooldown de 1s ya
-   * había pasado), pero el envío real en segundo plano SIEMPRE terminaba
-   * rechazado por el servidor (porque su ventana de 120s seguía activa), y
-   * cada rechazo agregaba una alerta nueva de corrección — una por cada
-   * reescaneo.
-   *
-   * Con los dos cooldowns alineados a 120 segundos, un reescaneo dentro de
-   * esa ventana muestra de inmediato el aviso "DUPLICADO" (badge ámbar,
-   * un solo sonido) en vez de la falsa confirmación seguida de la
-   * corrección del servidor.
-   */
+  // Debe coincidir con la ventana anti-duplicados del servidor (120 s).
   const COOLDOWN_DUPLICADO_MS = 120000;
-
-  /*
-   * PAUSA_CAMARA_MS — pausa BREVE de la decodificación de la cámara justo
-   * después de leer un QR, para que si el código sigue frente al lente no
-   * se vuelva a leer de inmediato. Es un concepto TOTALMENTE DISTINTO al
-   * cooldown de duplicado de arriba: aquí solo se trata de darle un
-   * respiro a la cámara, no de la regla de negocio de "no repetir el
-   * mismo movimiento antes de 2 minutos". Debe seguir siendo corta.
-   */
+  // Pausa breve de decodificación tras leer un QR.
   const PAUSA_CAMARA_MS = 1000;
 
-  /*
-   * COLA CON CONCURRENCIA LIMITADA A 2.
-   *
-   * Por qué 2 y no "todos a la vez" ni "de a uno":
-   * El candado (LockService) del lado del servidor serializa la escritura
-   * de todos modos — mandar 10 peticiones a la vez no aumenta el
-   * throughput real (solo una escribe por vez), pero SÍ satura la cola del
-   * candado y puede agotar el tiempo de espera de las últimas en llegar
-   * (el error "otro proceso ha retenido el bloqueo..."). Con concurrencia
-   * = 2: mientras una solicitud tiene el candado tomado escribiendo, la
-   * otra puede estar haciendo su validación previa (buscar al alumno,
-   * revisar vigencia — esto NO requiere candado del lado del servidor),
-   * así el candado casi nunca queda "frío" esperando a que llegue la
-   * siguiente solicitud, sin bombardear el backend con peticiones que de
-   * todos modos tendrían que esperar en fila.
-   */
   const MAX_CONCURRENCIA = 2;
   const colaEspera = [];
   let solicitudesActivas = 0;
 
-  /*
-   * Máximo de intentos por escaneo (1 inicial + 1 reintento automático).
-   * Solo se reintenta ante: timeout de red, error de conexión, o el error
-   * específico de candado ocupado del servidor — NUNCA ante un resultado
-   * de negocio definitivo (vencido, retirado, no registrado, muy reciente),
-   * porque reintentar esos no cambia nada y solo desperdicia un turno de
-   * concurrencia.
-   */
   const MAX_INTENTOS = 2;
-
-  /*
-   * TIMEOUT_MS — calibrado, no "aumentado a lo loco":
-   * El candado del servidor espera hasta 8 segundos (ver Código.gs). Un
-   * timeout del cliente más corto que eso (los 10s originales) puede
-   * disparar un "falso" timeout justo cuando el servidor está a punto de
-   * responder. 12 segundos da margen (8s de candado + ~4s de red/ejecución)
-   * sin sentirse como una espera excesiva. Y gracias al requestId de
-   * idempotencia, un reintento causado por este timeout YA NO puede crear
-   * un duplicado aunque el servidor sí haya completado el registro
-   * original después de que el cliente dejó de esperar.
-   */
   const TIMEOUT_MS = 12000;
 
-
   // ============================================================
-  // CACHÉ LOCAL DE ALUMNOS (localStorage) — CONFIRMACIÓN INSTANTÁNEA
+  // CACHÉ LOCAL DE ALUMNOS (localStorage) — dura 3 horas
   // ============================================================
-  //
-  // Guarda una copia de la lista de alumnos en el propio celular, para que
-  // cada escaneo pueda validar "¿existe?", "¿vencido?", "¿retirado?" AL
-  // INSTANTE, sin esperar respuesta del servidor — el sonido y la
-  // confirmación verde/roja dejan de depender de la latencia de red para
-  // estos casos (los más frecuentes). El registro real de asistencia se
-  // sigue mandando al servidor, pero en segundo plano, sin bloquear el
-  // siguiente escaneo.
-  //
-  // TRADE-OFF ACEPTADO: si un alumno fue registrado, renovado, o retirado
-  // hace muy poco (menos de lo que tarda en refrescarse esta caché), la
-  // validación local puede estar desactualizada por un rato corto. Se
-  // mitiga refrescando automáticamente cada 30 minutos y al abrir la app.
+  // Queda guardada en el celular con su hora de descarga: si cierras y abres
+  // el lector, NO vuelve a descargar hasta que pasen 3 horas.
+  // Solo se descarga con uso real (abrir, volver a la app, escanear) o al
+  // pulsar "Actualizar lista".
 
   const CLAVE_CACHE_ALUMNOS = 'academia_alumnos_cache_v1';
-  const INTERVALO_REFRESCO_CACHE_MS = 30 * 60 * 1000; // 30 minutos
+  const CADUCIDAD_CACHE_MS = 3 * 60 * 60 * 1000;   // 3 horas
+  const ESPERA_TRAS_FALLO_MS = 60 * 1000;          // tras un fallo automático, esperar 1 min
 
-  let cacheAlumnos = null; // { alumnos: [...], porId: {...}, porDni: {...}, timestamp }
+  let cacheAlumnos = null; // { alumnos, porId, porDni, timestamp }
+  let refrescandoCache = false;
+  let ultimoFalloCache = 0;
 
   function guardarCacheAlumnosEnStorage_(alumnos) {
     const paquete = { alumnos: alumnos, timestamp: Date.now() };
@@ -686,7 +258,6 @@
     }
   }
 
-  /** Busca un alumno en la caché local, por ID interno o por DNI. */
   function buscarAlumnoEnCache(idBuscado) {
     if (!cacheAlumnos) return null;
     const buscado = String(idBuscado).trim();
@@ -697,7 +268,6 @@
     return cacheAlumnos.alumnos[pos];
   }
 
-  /** Convierte "dd/MM/yyyy" a Date. Devuelve null si el formato no calza. */
   function parseFechaDDMMYYYY_(str) {
     if (!str) return null;
     const partes = String(str).trim().split('/');
@@ -709,45 +279,117 @@
 
   function alumnoEstaVencido_(alumno) {
     const fechaVenc = parseFechaDDMMYYYY_(alumno.Fecha_Vencimiento);
-    if (!fechaVenc) return false; // si no se puede leer la fecha, no se bloquea localmente por las dudas
+    if (!fechaVenc) return false;
     const hoy = new Date();
     hoy.setHours(0, 0, 0, 0);
     return fechaVenc < hoy;
   }
 
-  /** Descarga la lista de alumnos del servidor (vía el proxy) y actualiza la caché local. */
+  function cacheCaducada_() {
+    return !cacheAlumnos || !cacheAlumnos.timestamp ||
+      (Date.now() - cacheAlumnos.timestamp) > CADUCIDAD_CACHE_MS;
+  }
+
+  /** Descarga automática: solo si no hay caché o ya pasaron 3 horas desde la última descarga. */
+  function refrescarCacheSiCaduco_() {
+    if (refrescandoCache || !cacheCaducada_()) return;
+    if (!navigator.onLine) return;
+    if (Date.now() - ultimoFalloCache < ESPERA_TRAS_FALLO_MS) return;
+    refrescarCacheAlumnos();
+  }
+
+  /**
+   * Descarga la lista del servidor y actualiza la caché.
+   * Devuelve una promesa que resuelve true (ok) o false (falló).
+   */
   function refrescarCacheAlumnos() {
-    if (!URL_ENVIO || URL_ENVIO.indexOf('PEGA-AQUI') > -1) return;
-    fetch(URL_ENVIO + '?accion=listaAlumnos')
+    if (!URL_ENVIO || URL_ENVIO.indexOf('PEGA-AQUI') > -1) return Promise.resolve(false);
+    refrescandoCache = true;
+
+    return fetch(URL_ENVIO + '?accion=listaAlumnos')
       .then(r => r.json())
       .then(data => {
-        if (data && data.success && Array.isArray(data.alumnos)) {
-          guardarCacheAlumnosEnStorage_(data.alumnos);
-          console.log('Caché de alumnos actualizada: ' + data.alumnos.length + ' alumno(s).');
+        if (!data || !data.success) { ultimoFalloCache = Date.now(); return false; }
+
+        let alumnos = null;
+        if (Array.isArray(data.filas)) {            // formato compacto
+          const campos = data.campos || [];
+          alumnos = data.filas.map(f => {
+            const o = {};
+            campos.forEach((c, i) => { o[c] = f[i]; });
+            return o;
+          });
+        } else if (Array.isArray(data.alumnos)) {   // formato actual
+          alumnos = data.alumnos;
         }
+
+        if (!alumnos) { ultimoFalloCache = Date.now(); return false; }
+
+        guardarCacheAlumnosEnStorage_(alumnos);
+        console.log('Caché de alumnos actualizada: ' + alumnos.length + ' alumno(s).');
+        return true;
       })
       .catch(err => {
-        // Si falla el refresco, simplemente se sigue usando la copia local
-        // que ya había (o ninguna, si es la primera vez y no hay señal) —
-        // no debe interrumpir el flujo de escaneo.
+        ultimoFalloCache = Date.now();
         console.warn('No se pudo refrescar la caché de alumnos:', err);
+        return false;
+      })
+      .finally(() => {
+        refrescandoCache = false;
+        actualizarInfoCache_();
       });
+  }
+
+  // ---------- Botón "Actualizar lista" ----------
+
+  function textoHace_(ms) {
+    const min = Math.floor(ms / 60000);
+    if (min < 1) return 'hace menos de 1 min';
+    if (min < 60) return 'hace ' + min + ' min';
+    const h = Math.floor(min / 60);
+    const m = min % 60;
+    return 'hace ' + h + ' h' + (m ? ' ' + m + ' min' : '');
+  }
+
+  function actualizarInfoCache_() {
+    const el = document.getElementById('cacheInfo');
+    if (!el) return;
+    if (!cacheAlumnos || !cacheAlumnos.timestamp) {
+      el.textContent = 'Lista de alumnos: sin descargar todavía';
+      return;
+    }
+    el.textContent = 'Lista: ' + cacheAlumnos.alumnos.length + ' alumnos · actualizada ' +
+      textoHace_(Date.now() - cacheAlumnos.timestamp);
+  }
+
+  function actualizarListaManual() {
+    const btn = document.getElementById('btnActualizarLista');
+    const info = document.getElementById('cacheInfo');
+
+    if (refrescandoCache) { info.textContent = 'Ya se está actualizando…'; return; }
+    if (!navigator.onLine) { info.textContent = 'Sin internet: no se pudo actualizar.'; return; }
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Actualizando…';
+
+    refrescarCacheAlumnos().then(ok => {
+      btn.disabled = false;
+      btn.textContent = '🔄 Actualizar lista';
+      if (ok) {
+        info.textContent = '✅ Lista actualizada: ' + cacheAlumnos.alumnos.length + ' alumnos';
+        setTimeout(actualizarInfoCache_, 4000);
+      } else {
+        info.textContent = '⚠️ No se pudo actualizar. Revisa tu conexión e inténtalo de nuevo.';
+      }
+    });
   }
 
   // ============================================================
   // COLA PERSISTENTE DE REGISTROS PENDIENTES (localStorage)
   // ============================================================
-  //
-  // Cuando el registro real (el que sí escribe la fila en Sheets) no logra
-  // llegar al servidor tras los reintentos normales — por señal caída o muy
-  // lenta —, en vez de mostrarle un error al auxiliar (que ya vio la
-  // confirmación verde, basada en la validación local), el intento se
-  // guarda aquí y se reintenta solo en segundo plano, incluso si la página
-  // se recarga o el celular se apaga y se vuelve a prender.
-
   const CLAVE_COLA_PENDIENTE = 'academia_cola_pendiente_v1';
-  const INTERVALO_REINTENTO_COLA_MS = 5000; // cada 5 segundos
-  const MAX_INTENTOS_COLA = 20; // ~100 segundos de reintentos automáticos antes de pausar
+  const INTERVALO_REINTENTO_COLA_MS = 5000;
+  const MAX_INTENTOS_COLA = 20;
 
   function leerColaPendiente_() {
     try {
@@ -773,32 +415,20 @@
     actualizarContadorPendientes();
   }
 
-  /** ¿Hay un intento ya en curso o en cola persistente para este alumno? */
   function alumnoTieneAlgoPendiente(idAlumno) {
     if (enProceso.has(idAlumno)) return true;
     return leerColaPendiente_().some(function (item) { return item.idAlumno === idAlumno; });
   }
 
-  /**
-   * Recorre la cola persistente e intenta reenviar cada item, UNO POR
-   * INTENTO por cada pasada (no reintentos en ráfaga) — así, si la red
-   * sigue caída, no se satura de solicitudes esperando timeout todas a la
-   * vez. Los que superan MAX_INTENTOS_COLA quedan marcados como
-   * "requierenRevisionManual" y dejan de reintentarse solos (para no
-   * gastar batería/datos indefinidamente si algo está genuinamente mal),
-   * pero SIGUEN en la cola, visibles, hasta que el auxiliar los reenvíe a
-   * mano con el botón correspondiente.
-   */
   function procesarColaPendientePersistente() {
+    if (!navigator.onLine) return; // sin red no se gasta nada
+
     const cola = leerColaPendiente_();
     if (cola.length === 0) return;
 
     const pendientesDeIntentar = cola.filter(function (item) { return !item.requiereRevisionManual; });
     if (pendientesDeIntentar.length === 0) return;
 
-    // Procesa de a uno por pasada del intervalo, para no bombardear la red
-    // si hay varios acumulados — el siguiente se intentará en la próxima
-    // pasada (5 segundos después).
     const item = pendientesDeIntentar[0];
     item.intentos = (item.intentos || 0) + 1;
 
@@ -817,20 +447,11 @@
       .then(data => {
         quitarDeColaPendiente_(item.requestId);
         if (!data.success && esRechazoDeNegocio_(data)) {
-          // El servidor rechazó por una razón de negocio real (vencido,
-          // retirado, etc.) que la validación local no detectó a tiempo
-          // (caché desactualizada). Se avisa explícitamente, porque el
-          // auxiliar ya había dejado pasar al alumno con la confirmación
-          // optimista.
           mostrarAlertaCorreccion_(item.nombreAlumno || item.idAlumno, data.message);
         }
-        // Si success:true, no hace falta avisar nada — ya se confirmó al
-        // momento del escaneo.
       })
       .catch(() => {
         clearTimeout(timeoutId);
-        // Sigue sin poder enviarse: se actualiza el contador de intentos
-        // en la cola guardada, y se reintenta en la próxima pasada.
         const colaActual = leerColaPendiente_();
         const idx = colaActual.findIndex(function (c) { return c.requestId === item.requestId; });
         if (idx > -1) {
@@ -850,39 +471,26 @@
     actualizarContadorPendientes();
   }
 
-  /** Reintenta AHORA MISMO (sin esperar el próximo intervalo) todos los pendientes, incluidos los pausados. */
   function reintentarColaPendienteManualmente() {
     const cola = leerColaPendiente_().map(function (item) {
-      item.requiereRevisionManual = false; // se les da otra oportunidad
+      item.requiereRevisionManual = false;
       return item;
     });
     guardarColaPendiente_(cola);
     procesarColaPendientePersistente();
   }
 
-  /** ¿Este resultado del servidor es un rechazo de NEGOCIO (no un problema de red/candado)? */
   function esRechazoDeNegocio_(data) {
     return !!(data && data.tipoError && ['vencido', 'retirado', 'no_registrado', 'muy_reciente'].indexOf(data.tipoError) > -1);
   }
 
-  /*
-   * Recuerda la última corrección mostrada por "alumno + mensaje", para no
-   * apilar el mismo aviso dos veces seguidas si por alguna razón el
-   * servidor lo rechaza más de una vez en poco tiempo (defensa adicional;
-   * el arreglo de fondo es que COOLDOWN_DUPLICADO_MS ya coincide con la
-   * ventana anti-duplicados real del servidor, así que esto casi nunca
-   * debería activarse).
-   */
-  const ultimasCorreccionesMostradas = new Map(); // "alumno|mensaje" -> timestamp
-  const VENTANA_SIN_REPETIR_CORRECCION_MS = 30000; // 30 segundos
+  const ultimasCorreccionesMostradas = new Map();
+  const VENTANA_SIN_REPETIR_CORRECCION_MS = 30000;
 
-  /** Alerta de corrección: se muestra cuando la validación local decía "ok" pero el servidor, al confirmar de verdad, rechazó el registro. */
   function mostrarAlertaCorreccion_(nombreOId, mensajeServidor) {
     const clave = nombreOId + '|' + mensajeServidor;
     const ahora = Date.now();
-    if (ahora - (ultimasCorreccionesMostradas.get(clave) || 0) < VENTANA_SIN_REPETIR_CORRECCION_MS) {
-      return; // la misma corrección ya se mostró hace muy poco: no se apila de nuevo
-    }
+    if (ahora - (ultimasCorreccionesMostradas.get(clave) || 0) < VENTANA_SIN_REPETIR_CORRECCION_MS) return;
     ultimasCorreccionesMostradas.set(clave, ahora);
 
     const div = document.createElement('div');
@@ -890,28 +498,11 @@
     div.innerHTML = '⚠️ <strong>Revisar ' + nombreOId + ':</strong> ' + mensajeServidor;
     resultadoDiv.prepend(div);
     beepError();
-    vibrar([100, 60, 100, 60, 100]); // patrón distinto: llama más la atención que un error normal
+    vibrar([100, 60, 100, 60, 100]);
   }
 
-  /**
-   * Muestra INMEDIATAMENTE un aviso de "duplicado" (mismo QR ya procesado
-   * hace un instante, o todavía en curso), con un badge bien resaltante y
-   * los datos del alumno (nombre, DNI, modalidad/grupo) tomados de la
-   * caché local — así el auxiliar identifica de un vistazo A QUIÉN
-   * corresponde el aviso, sin tener que leer solo el ID/DNI escaneado.
-   *
-   * "alumno": objeto de la caché local (buscarAlumnoEnCache) o null si no
-   * se encontró (por ejemplo, un DNI mal escrito). En ese caso se muestra
-   * el aviso igual, sin la ficha de datos.
-   */
   function mostrarDuplicadoInmediato_(mensaje, alumno, secuencia) {
-    // Mismo criterio que mostrarResultado(): si para cuando se ejecuta este
-    // aviso ya se disparó un escaneo más nuevo, se descarta en silencio
-    // (ni pinta, ni suena) — así un "duplicado" viejo nunca vuelve a
-    // aparecer encima de lo que el auxiliar ya está viendo.
-    if (typeof secuencia === 'number' && secuencia !== secuenciaEscaneo) {
-      return;
-    }
+    if (typeof secuencia === 'number' && secuencia !== secuenciaEscaneo) return;
 
     const datosExtra = alumno
       ? '<div class="datos-alumno-dup">' +
@@ -932,169 +523,70 @@
     beepDuplicado();
   }
 
-
-
   function elegirModo(modo) {
-
     modoActual = modo;
-
-    document.getElementById('btnModoEntrada').className =
-      modo === 'Entrada'
-        ? 'activo-entrada'
-        : '';
-
-    document.getElementById('btnModoSalida').className =
-      modo === 'Salida'
-        ? 'activo-salida'
-        : '';
+    document.getElementById('btnModoEntrada').className = modo === 'Entrada' ? 'activo-entrada' : '';
+    document.getElementById('btnModoSalida').className = modo === 'Salida' ? 'activo-salida' : '';
   }
-
-
   elegirModo('Entrada');
 
-
-  // ============================================================
-  // CERRAR APP
-  // ============================================================
-
   function cerrarApp() {
-
     detenerCamara_();
-
     window.close();
   }
 
-
   // ============================================================
-  // SONIDO DE FEEDBACK (sin archivos externos)
+  // SONIDO Y VIBRACIÓN
   // ============================================================
-  //
-  // Deja que el auxiliar sepa si el escaneo entró bien, falló, o es un
-  // duplicado, SIN tener que leer la pantalla — esto agiliza mucho el
-  // flujo real cuando hay una fila de alumnos esperando.
-  //
-  // AJUSTE DE VOLUMEN: se subió la ganancia de 0.15 a 0.9 (el
-  // máximo recomendado sin que la onda se distorsione) y se
-  // cambió el tipo de onda de 'sine' a 'square', que suena más
-  // "llena" y penetrante a volumen alto. También se alargó un
-  // poco la duración del beep de éxito para que se note más.
-  // Si aun así suena bajo, revisa el volumen de "Multimedia"
-  // del celular (no el de "Timbre") y que no esté en silencio.
-  // ============================================================
-
   let audioCtx = null;
 
   function beep(frecuencia, duracionMs) {
-
     try {
-
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       }
-
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
-
-      osc.type = 'square'; // onda cuadrada: más "llena" y penetrante que 'sine'
+      osc.type = 'square';
       osc.frequency.value = frecuencia;
-      gain.gain.value = 0.9; // antes 0.15 — máximo recomendado sin distorsionar
-
+      gain.gain.value = 0.9;
       osc.connect(gain);
       gain.connect(audioCtx.destination);
-
       osc.start();
-
-      setTimeout(() => {
-        osc.stop();
-      }, duracionMs);
-
-    } catch (e) {
-      // Si el navegador bloquea audio sin interacción previa,
-      // simplemente no suena — no debe romper el flujo.
-    }
+      setTimeout(() => { osc.stop(); }, duracionMs);
+    } catch (e) { /* si el navegador bloquea el audio, no rompe el flujo */ }
   }
 
-  /*
-   * VIBRACIÓN como refuerzo adicional al sonido. Útil cuando el ambiente
-   * está ruidoso (fila de alumnos, patio, etc.) y el beep es difícil de
-   * escuchar. Si el navegador/dispositivo no soporta vibración (ej.
-   * iPhone en Safari), simplemente no hace nada — no rompe el flujo.
-   */
   function vibrar(patron) {
-    try {
-      if (navigator.vibrate) {
-        navigator.vibrate(patron);
-      }
-    } catch (e) { /* silencioso */ }
+    try { if (navigator.vibrate) navigator.vibrate(patron); } catch (e) { /* silencioso */ }
   }
 
-  function beepExito() {
-    beep(880, 200);
-    vibrar(80); // vibración corta única = éxito
-  }
-
-  function beepError() {
-    beep(220, 300);
-    vibrar([80, 60, 80]); // dos vibraciones cortas = error/atención
-  }
-
-  /**
-   * NUEVO — Sonido/vibración propios para "duplicado", distintos de éxito
-   * (un tono agudo único) y de error (un tono grave único): dos "bips"
-   * cortos de tono medio-agudo en rápida sucesión, con un patrón de
-   * vibración de tres pulsos muy cortos. Así, con los ojos cerrados, el
-   * auxiliar puede distinguir los tres casos solo por el sonido.
-   */
+  function beepExito() { beep(880, 200); vibrar(80); }
+  function beepError() { beep(220, 300); vibrar([80, 60, 80]); }
   function beepDuplicado() {
     beep(660, 90);
     setTimeout(() => beep(660, 90), 150);
     vibrar([40, 40, 40]);
   }
 
-  /*
-   * Ya NO hay beep/destello instantáneo de "captura" (al detectar el QR,
-   * antes de esperar la respuesta del servidor) — eso generaba DOS
-   * señales separadas por varios segundos (una al detectar, otra al
-   * confirmar), dando sensación de demora. El ÚNICO sonido y destello
-   * ahora es el de la confirmación FINAL (beepExito/beepError +
-   * destelloExito/destelloError), disparados juntos desde
-   * mostrarResultado() cuando llega la respuesta del servidor — o el aviso
-   * de duplicado (mostrarDuplicadoInmediato_), disparado al instante
-   * cuando el mismo QR se reescanea antes de tiempo.
-   */
-
-  /*
-   * Destello del recuadro de la cámara, sincronizado con la confirmación
-   * final — se llama desde mostrarResultado(), al mismo tiempo que suena
-   * el beep y aparece el mensaje. Verde para éxito, rojo para error.
-   */
-
   function destelloExito() {
     qrReaderDiv.classList.add('destello-exito');
-    setTimeout(() => {
-      qrReaderDiv.classList.remove('destello-exito');
-    }, 400);
+    setTimeout(() => { qrReaderDiv.classList.remove('destello-exito'); }, 400);
   }
 
   function destelloError() {
     qrReaderDiv.classList.add('destello-error');
-    setTimeout(() => {
-      qrReaderDiv.classList.remove('destello-error');
-    }, 400);
+    setTimeout(() => { qrReaderDiv.classList.remove('destello-error'); }, 400);
   }
 
-
   // ============================================================
-  // CONTADOR DE PENDIENTES (feedback visual de que sí procesa)
+  // CONTADOR DE PENDIENTES
   // ============================================================
-
   function actualizarContadorPendientes() {
-
     const enMemoria = enProceso.size;
     const cola = leerColaPendiente_();
     const enColaPersistente = cola.length;
     const requierenRevision = cola.filter(function (i) { return i.requiereRevisionManual; }).length;
-
     const total = enMemoria + enColaPersistente;
 
     if (total === 0) {
@@ -1117,34 +609,11 @@
     }
   }
 
-
   // ============================================================
   // MOSTRAR RESULTADO
   // ============================================================
-  //
-  // "smsEstado": si el backend lo envía (campo "smsEstado" en la respuesta
-  // de registrarAsistencia), se muestra como una línea aparte debajo del
-  // mensaje principal, junto con la misma confirmación verde/roja — sin
-  // esperar a una segunda respuesta.
-  //
-  // "diagnosticoTiempos": objeto con los milisegundos que tardó cada paso
-  // del lado del servidor (ver Código.gs). Se muestra en una línea diminuta
-  // debajo de todo, solo mientras se está diagnosticando la demora de los
-  // escaneos — así no hay que entrar al panel de Ejecuciones de Apps
-  // Script, basta con leer la pantalla del celular después de escanear.
-  // ============================================================
-
   function mostrarResultado(ok, texto, nombre, smsEstado, diagnosticoTiempos, secuencia) {
-
-    // Si esta respuesta pertenece a un escaneo ANTERIOR y mientras viajaba
-    // ya se escaneó algo más nuevo, se descarta en silencio: no pinta la
-    // pantalla ni suena. Esto es lo que evita que una confirmación o un
-    // error "atrasado" (por ejemplo, el envío en segundo plano de un
-    // alumno escaneado hace unos segundos) se superponga o suene junto con
-    // el aviso de duplicado / la confirmación del escaneo actual.
-    if (typeof secuencia === 'number' && secuencia !== secuenciaEscaneo) {
-      return;
-    }
+    if (typeof secuencia === 'number' && secuencia !== secuenciaEscaneo) return;
 
     let lineaDiag = '';
     if (diagnosticoTiempos) {
@@ -1156,27 +625,11 @@
     }
 
     resultadoDiv.innerHTML =
-
-      '<div class="resultado ' +
-      (ok ? 'ok' : 'error') +
-      '">' +
-
-      (nombre
-        ? '<div class="nombre">' +
-          nombre +
-          '</div>'
-        : '') +
-
-      (ok ? '✅ ' : '⚠️ ') +
-
-      texto +
-
-      (smsEstado
-        ? '<div class="sms-linea">📩 ' + smsEstado + '</div>'
-        : '') +
-
+      '<div class="resultado ' + (ok ? 'ok' : 'error') + '">' +
+      (nombre ? '<div class="nombre">' + nombre + '</div>' : '') +
+      (ok ? '✅ ' : '⚠️ ') + texto +
+      (smsEstado ? '<div class="sms-linea">📩 ' + smsEstado + '</div>' : '') +
       lineaDiag +
-
       '</div>';
 
     if (ok) {
@@ -1188,77 +641,43 @@
     }
   }
 
-
   // ============================================================
-  // MARCAR ASISTENCIA — PUNTO DE ENTRADA (llamado por la cámara y por el
-  // input manual). Ya NO envía la solicitud directamente: la encola, y es
-  // la cola (procesarCola) la que respeta el límite de concurrencia.
-  //
-  // Los mensajes de "duplicado" se muestran al instante, con el badge
-  // resaltante y los datos del alumno (ver mostrarDuplicadoInmediato_),
-  // en vez de ignorarse en silencio como en versiones muy antiguas — así
-  // el auxiliar entiende de inmediato que el escaneo SÍ fue detectado,
-  // pero que ese alumno ya se registró o se está registrando.
+  // MARCAR ASISTENCIA — punto de entrada (cámara e input manual)
   // ============================================================
-
   function marcarAsistencia(idAlumnoRaw) {
 
     const idAlumno = (idAlumnoRaw || '').trim();
     if (!idAlumno) return;
 
-    // Cada llamada a marcarAsistencia() es un escaneo NUEVO: se le asigna
-    // su propia secuencia. A partir de aquí, TODO aviso relacionado con
-    // este escaneo (duplicado, éxito, error) lleva este número — así, si
-    // llega tarde (después de que el auxiliar ya escaneó otra cosa),
-    // mostrarResultado()/mostrarDuplicadoInmediato_() lo descartan solos.
-    const miSecuencia = ++secuenciaEscaneo;
+    refrescarCacheSiCaduco_(); // uso real: solo descarga si ya pasaron 3 horas
 
-    // Objeto completo del alumno (si está en la caché local), para poder
-    // mostrar su ficha completa en los avisos de duplicado.
+    const miSecuencia = ++secuenciaEscaneo;
     const alumnoLocalParaNombre = buscarAlumnoEnCache(idAlumno);
 
-    // ---- Duplicado por cooldown post-completado: avisar INMEDIATAMENTE ----
+    // Duplicado por cooldown: aviso inmediato.
     const ahora = Date.now();
     if (ahora - (alumnosRecientes.get(idAlumno) || 0) < COOLDOWN_DUPLICADO_MS) {
-      mostrarDuplicadoInmediato_(
-        'Ya tiene un movimiento registrado hace unos segundos.',
-        alumnoLocalParaNombre,
-        miSecuencia
-      );
+      mostrarDuplicadoInmediato_('Ya tiene un movimiento registrado hace unos segundos.', alumnoLocalParaNombre, miSecuencia);
       return;
     }
 
-    // ---- Ya hay un intento en curso (en memoria) O en la cola persistente para este alumno: avisar INMEDIATAMENTE ----
+    // Ya hay un intento en curso o en la cola persistente.
     if (alumnoTieneAlgoPendiente(idAlumno)) {
-      mostrarDuplicadoInmediato_(
-        'Ya se está procesando, espera un momento.',
-        alumnoLocalParaNombre,
-        miSecuencia
-      );
+      mostrarDuplicadoInmediato_('Ya se está procesando, espera un momento.', alumnoLocalParaNombre, miSecuencia);
       return;
     }
 
-    if (
-      !URL_ENVIO ||
-      URL_ENVIO.indexOf('PEGA-AQUI') > -1
-    ) {
+    if (!URL_ENVIO || URL_ENVIO.indexOf('PEGA-AQUI') > -1) {
       mostrarResultado(false, 'Falta configurar la URL del proxy (URL_PROXY) en el lector.', null, null, null, miSecuencia);
       return;
     }
 
-    // ============================================================
-    // VALIDACIÓN LOCAL PRIMERO — esto es lo que hace que el sonido y la
-    // confirmación verde sean estables sin importar la red, para los casos
-    // más frecuentes (alumno válido, o alumno vencido/retirado).
-    // ============================================================
+    // Validación local primero: confirmación instantánea sin depender de la red.
     const alumnoLocal = buscarAlumnoEnCache(idAlumno);
 
     if (alumnoLocal) {
 
       if (alumnoLocal.Estado_Matricula === 'Retirado') {
-        // Rechazo seguro de decidir 100% localmente: el servidor tampoco
-        // lo dejaría pasar, así que ni siquiera hace falta gastar una
-        // llamada de red para esto — confirmación instantánea.
         alumnosRecientes.set(idAlumno, ahora);
         mostrarResultado(false, alumnoLocal.Nombre_Completo + ' está RETIRADO. No se puede registrar asistencia.', alumnoLocal.Nombre_Completo, null, null, miSecuencia);
         return;
@@ -1270,10 +689,8 @@
         return;
       }
 
-      // Alumno válido según la copia local: confirmación INSTANTÁNEA
-      // (beep + verde), y el registro real se manda en segundo plano.
       const requestId = idAlumno + '_' + ahora + '_' + Math.random().toString(36).slice(2, 8);
-      enProceso.set(idAlumno, { requestId: requestId, intentos: 0 }); // solo para el cooldown/anti-doble-tap visual
+      enProceso.set(idAlumno, { requestId: requestId, intentos: 0 });
       actualizarContadorPendientes();
 
       mostrarResultado(
@@ -1287,21 +704,12 @@
 
       enviarRegistroEnSegundoPlano_(idAlumno, modoActual, requestId, alumnoLocal.Nombre_Completo);
       alumnosRecientes.set(idAlumno, ahora);
-      // Libera el "en proceso" apenas se confirma visualmente — el envío
-      // real ya sigue su propio camino independiente (cola persistente si
-      // hace falta), no necesita bloquear un reescaneo del mismo alumno.
       enProceso.delete(idAlumno);
       actualizarContadorPendientes();
       return;
     }
 
-    // ============================================================
-    // ALUMNO NO ENCONTRADO EN LA CACHÉ LOCAL — puede ser un alumno
-    // genuinamente nuevo que aún no se sincronizó, o la primera vez que se
-    // abre el lector y todavía no bajó la lista. En este caso SÍ se espera
-    // la respuesta completa del servidor (comportamiento anterior), porque
-    // no hay base local para decidir con confianza.
-    // ============================================================
+    // Alumno no encontrado en la caché local: se espera la respuesta del servidor.
     const requestId = idAlumno + '_' + ahora + '_' + Math.random().toString(36).slice(2, 8);
     const entrada = { requestId: requestId, intentos: 0, seq: miSecuencia };
     enProceso.set(idAlumno, entrada);
@@ -1311,14 +719,6 @@
     procesarCola();
   }
 
-  /**
-   * Envía el registro real al servidor SIN bloquear la UI (ya se confirmó
-   * de forma optimista). Reutiliza la misma clasificación de errores que
-   * ejecutarConReintentos (red/candado = reintentar; negocio = rechazo
-   * real). Si tras MAX_INTENTOS no se logra, en vez de mostrar un error
-   * (el auxiliar ya vio verde y el alumno ya pasó), se guarda en la cola
-   * persistente para reintentar solo, incluso entre recargas de página.
-   */
   function enviarRegistroEnSegundoPlano_(idAlumno, tipoMovimiento, requestId, nombreAlumno, intentoActual) {
     intentoActual = (intentoActual || 0) + 1;
 
@@ -1346,21 +746,14 @@
         }
 
         if (!data.success && esRechazoDeNegocio_(data)) {
-          // La caché local decía que estaba todo bien pero el servidor
-          // (con datos más frescos) rechazó de verdad — se avisa, porque
-          // ya se dejó pasar al alumno con la confirmación optimista.
           mostrarAlertaCorreccion_(nombreAlumno || idAlumno, data.message);
         }
-        // Si success:true, no se necesita hacer nada más — ya se confirmó
-        // al momento del escaneo.
       })
       .catch(err => {
         clearTimeout(timeoutId);
         if (intentoActual < MAX_INTENTOS) {
           return enviarRegistroEnSegundoPlano_(idAlumno, tipoMovimiento, requestId, nombreAlumno, intentoActual);
         }
-        // Se agotaron los reintentos inmediatos: pasa a la cola persistente,
-        // que seguirá reintentando en segundo plano cada 5 segundos.
         agregarAColaPendiente_({
           idAlumno: idAlumno,
           tipoMovimiento: tipoMovimiento,
@@ -1372,36 +765,23 @@
       });
   }
 
-
   // ============================================================
   // COLA DE CONCURRENCIA LIMITADA
   // ============================================================
-
   function procesarCola() {
     while (solicitudesActivas < MAX_CONCURRENCIA && colaEspera.length > 0) {
       const item = colaEspera.shift();
       solicitudesActivas++;
 
       ejecutarConReintentos(item.idAlumno, item.entrada)
-        .then(() => {
-          finalizarSolicitud(item.idAlumno, item.entrada);
-        })
+        .then(() => { finalizarSolicitud(item.idAlumno, item.entrada); })
         .finally(() => {
           solicitudesActivas--;
-          procesarCola(); // libera el turno para el siguiente en espera
+          procesarCola();
         });
     }
   }
 
-  /**
-   * Cierra el ciclo de vida de un intento (éxito o error definitivo tras
-   * agotar los reintentos). Solo borra la entrada del mapa si la que sigue
-   * activa ahí es EXACTAMENTE este mismo objeto — comparación por
-   * referencia (===), no por valor. Como nunca puede existir más de una
-   * entrada activa por alumno a la vez (ver marcarAsistencia), esto
-   * garantiza que una solicitud vieja jamás borre la protección de una
-   * más nueva.
-   */
   function finalizarSolicitud(idAlumno, entrada) {
     if (enProceso.get(idAlumno) === entrada) {
       enProceso.delete(idAlumno);
@@ -1411,34 +791,12 @@
     actualizarEstadoSiVigente_('Apunta la cámara al código QR…', entrada.seq);
   }
 
-
   // ============================================================
   // ENVÍO CON REINTENTOS CLASIFICADOS
   // ============================================================
-  //
-  // Reintenta (mismo requestId, mismo objeto "entrada") SOLO ante:
-  //  - timeout de red (AbortError)
-  //  - error de conexión (fetch rechaza la promesa)
-  //  - error específico de candado ocupado devuelto por el servidor
-  //    (success:false + mensaje que menciona "tiempo de espera"/"bloqueo")
-  //
-  // NUNCA reintenta ante un resultado de negocio definitivo (vencido,
-  // retirado, no registrado, muy reciente, o cualquier success:true) —
-  // esos ya son la respuesta final, reintentarlos no cambia nada. Cuando
-  // el servidor responde con tipoError "muy_reciente", mostrarResultado()
-  // ya muestra ese rechazo de inmediato, con el mismo espíritu de "avisar
-  // rápido" que el aviso de duplicado del lado del cliente.
-  //
-  // Gracias al requestId de idempotencia (ver Código.gs), aunque este
-  // reintento ocurra porque el cliente perdió la respuesta original y el
-  // servidor SÍ la completó, el backend detecta la repetición y devuelve
-  // el mismo resultado sin duplicar la escritura.
-  // ============================================================
-
   function ejecutarConReintentos(idAlumno, entrada) {
 
     entrada.intentos++;
-
     actualizarEstadoSiVigente_('Enviando ' + modoActual + '…', entrada.seq);
 
     const url =
@@ -1450,7 +808,6 @@
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
-
     const tEnvioFetch = Date.now();
 
     return fetch(url, { signal: controller.signal })
@@ -1462,22 +819,13 @@
       })
 
       .then(data => {
-
-        const esErrorDeCandado =
-          !data.success &&
-          data.message &&
-          /tiempo de espera|bloqueo/i.test(data.message);
+        const esErrorDeCandado = !data.success && data.message && /tiempo de espera|bloqueo/i.test(data.message);
 
         if (esErrorDeCandado && entrada.intentos < MAX_INTENTOS) {
           actualizarEstadoSiVigente_('Reintentando ' + idAlumno + '…', entrada.seq);
-          return ejecutarConReintentos(idAlumno, entrada); // mismo requestId
+          return ejecutarConReintentos(idAlumno, entrada);
         }
 
-        // ---- DIAGNÓSTICO (v9.2) — se agrega el tiempo TOTAL medido desde
-        // el propio navegador (fetch de ida y vuelta), para compararlo con
-        // el "total_ms" que reporta el servidor. La diferencia entre ambos
-        // es, aproximadamente, la latencia pura de red entre el celular y
-        // los servidores de Apps Script.
         const diag = Object.assign({}, data.diagnosticoTiempos || {});
         diag.fetchIdaYVuelta_ms = Date.now() - tEnvioFetch;
 
@@ -1493,12 +841,11 @@
 
       .catch(err => {
         clearTimeout(timeoutId);
-
         const fueTimeout = err && err.name === 'AbortError';
 
         if (entrada.intentos < MAX_INTENTOS) {
           actualizarEstadoSiVigente_('Reintentando ' + idAlumno + '…', entrada.seq);
-          return ejecutarConReintentos(idAlumno, entrada); // mismo requestId
+          return ejecutarConReintentos(idAlumno, entrada);
         }
 
         mostrarResultado(
@@ -1506,143 +853,65 @@
           fueTimeout
             ? 'El servidor tardó demasiado en responder. Intenta escanear de nuevo.'
             : 'No se pudo conectar con el servidor: ' + err.message,
-          null,
-          null,
-          null,
+          null, null, null,
           entrada.seq
         );
       });
   }
 
-
   // ============================================================
-  // INICIALIZACIÓN DE CACHÉ LOCAL Y COLA PERSISTENTE
+  // INICIALIZACIÓN
   // ============================================================
-  // Se hace apenas carga la página, ANTES de que la cámara esté lista,
-  // para que la caché ya esté disponible desde el primer escaneo posible.
+  cargarCacheAlumnosDeStorage_();      // carga la copia guardada en el celular
+  refrescarCacheSiCaduco_();           // solo descarga si no existe o tiene más de 3 horas
+  actualizarInfoCache_();
+  setInterval(actualizarInfoCache_, 60000); // solo actualiza el texto "hace X min" (sin red)
 
-  cargarCacheAlumnosDeStorage_();      // usa la copia local si ya existía
-  refrescarCacheAlumnos();             // y de todos modos pide una versión fresca
-  setInterval(refrescarCacheAlumnos, INTERVALO_REFRESCO_CACHE_MS);
-
-  actualizarContadorPendientes();      // por si quedaron pendientes de una sesión anterior
+  actualizarContadorPendientes();
   setInterval(procesarColaPendientePersistente, INTERVALO_REINTENTO_COLA_MS);
-
 
   // ============================================================
   // INICIAR LECTOR QR
   // ============================================================
-
-  if (
-    typeof Html5Qrcode === 'undefined'
-  ) {
+  if (typeof Html5Qrcode === 'undefined') {
 
     estadoDiv.innerHTML =
-      '<div class="resultado error">' +
-      'No se pudo cargar la librería del lector QR. ' +
-      'Revisa tu conexión a internet.' +
-      '</div>';
+      '<div class="resultado error">No se pudo cargar la librería del lector QR. Revisa tu conexión a internet.</div>';
 
-  }
-
-  else if (!window.isSecureContext) {
+  } else if (!window.isSecureContext) {
 
     estadoDiv.innerHTML =
-      '<div class="resultado error">' +
-      'Esta página debe abrirse por HTTPS ' +
-      'para poder usar la cámara.' +
-      '</div>';
+      '<div class="resultado error">Esta página debe abrirse por HTTPS para poder usar la cámara.</div>';
 
-  }
+  } else {
 
-  else {
-
-    Html5Qrcode
-      .getCameras()
-
+    Html5Qrcode.getCameras()
       .then(camaras => {
 
-        if (
-          !camaras ||
-          camaras.length === 0
-        ) {
-
-          estadoDiv.innerHTML =
-            '<div class="resultado error">' +
-            'No se detectó ninguna cámara conectada.' +
-            '</div>';
-
+        if (!camaras || camaras.length === 0) {
+          estadoDiv.innerHTML = '<div class="resultado error">No se detectó ninguna cámara conectada.</div>';
           return;
         }
 
-
-        // ------------------------------------------------------
-        // BUSCAR CÁMARA TRASERA
-        // ------------------------------------------------------
-
-        const trasera =
-
-          camaras.find(c =>
-            /back|trasera|rear|environment/i
-              .test(c.label || '')
-          );
-
-
-        const elegida =
-          trasera || camaras[0];
-
-        // Se guarda el ID globalmente para que detenerCamara_()/
-        // iniciarCamara_() puedan reiniciar la cámara más adelante sin
-        // tener que volver a listar/elegir cámaras.
+        const trasera = camaras.find(c => /back|trasera|rear|environment/i.test(c.label || ''));
+        const elegida = trasera || camaras[0];
         camaraDeviceId = elegida.id;
 
-
-        // ------------------------------------------------------
-        // CREAR ESCÁNER
-        // ------------------------------------------------------
-
-        const scanner =
-          new Html5Qrcode('qr-reader');
-
-
+        // Solo códigos QR: no prueba otros formatos de barras (menos CPU).
+        const scanner = new Html5Qrcode('qr-reader', {
+          formatsToSupport: [Html5QrcodeSupportedFormats.QR_CODE],
+          verbose: false
+        });
         scannerRef = scanner;
 
-
-        // ------------------------------------------------------
-        // INICIAR CÁMARA
-        // ------------------------------------------------------
-
         scanner.start(
-
-          {
-            deviceId: {
-              exact: elegida.id
-            }
-          },
-
+          { deviceId: { exact: elegida.id } },
           CONFIG_QR,
 
-          /*
-           * QR DETECTADO
-           */
-
           decodedText => {
+            marcarAsistencia(decodedText);
 
-            marcarAsistencia(
-              decodedText
-            );
-
-            /*
-             * PAUSA BREVE DE LA CÁMARA (NUEVO):
-             * Justo después de procesar la lectura, se pausa la
-             * decodificación un par de segundos (PAUSA_CAMARA_MS). Así, si el
-             * QR sigue frente al lente, no se vuelve a leer de inmediato
-             * y no dispara un "duplicado" encima del mensaje de éxito que
-             * recién apareció — el auxiliar alcanza a verlo y escucharlo
-             * primero. El aviso de "duplicado" solo aparecerá si de
-             * verdad se vuelve a escanear después de que la cámara se
-             * reactive (o si se ingresa el mismo ID a mano).
-             */
+            // Pausa breve de decodificación para no releer el mismo QR de inmediato.
             if (scannerRef && camaraActiva && !pausadoPorCooldown) {
               pausadoPorCooldown = true;
               try { scannerRef.pause(true); } catch (e) {}
@@ -1653,103 +922,38 @@
                 }
               }, PAUSA_CAMARA_MS);
             }
-
           },
 
-          /*
-           * Frame sin QR.
-           *
-           * No hacemos nada.
-           */
-
           () => {}
-
         )
-
         .then(() => {
-
           camaraActiva = true;
-
-          estadoDiv.textContent =
-            'Apunta la cámara al código QR…';
-
+          estadoDiv.textContent = 'Apunta la cámara al código QR…';
         })
-
         .catch(err => {
+          const nombre = (err && err.name) || String(err);
+          let ayuda = 'No se pudo acceder a la cámara (' + nombre + ').';
 
-          const nombre =
-            (err && err.name) ||
-            String(err);
-
-
-          let ayuda =
-            'No se pudo acceder a la cámara (' +
-            nombre +
-            ').';
-
-
-          if (
-            nombre.indexOf('NotAllowed') > -1
-          ) {
-
-            ayuda +=
-              ' Revisa el permiso de cámara ' +
-              'para este sitio en tu navegador.';
-
+          if (nombre.indexOf('NotAllowed') > -1) {
+            ayuda += ' Revisa el permiso de cámara para este sitio en tu navegador.';
+          } else if (nombre.indexOf('NotReadable') > -1) {
+            ayuda += ' La cámara está siendo usada por otra aplicación.';
           }
 
-          else if (
-            nombre.indexOf('NotReadable') > -1
-          ) {
-
-            ayuda +=
-              ' La cámara está siendo usada ' +
-              'por otra aplicación.';
-
-          }
-
-
-          estadoDiv.innerHTML =
-            '<div class="resultado error">' +
-            ayuda +
-            '</div>';
-
+          estadoDiv.innerHTML = '<div class="resultado error">' + ayuda + '</div>';
         });
-
       })
-
       .catch(err => {
-
         estadoDiv.innerHTML =
-          '<div class="resultado error">' +
-          'No se pudo listar las cámaras: ' +
-          ((err && err.message) || err) +
-          '</div>';
-
+          '<div class="resultado error">No se pudo listar las cámaras: ' + ((err && err.message) || err) + '</div>';
       });
-
   }
-
 
   // ============================================================
   // SERVICE WORKER
   // ============================================================
-
-  if (
-    'serviceWorker' in navigator
-  ) {
-
-    navigator.serviceWorker
-      .register('sw.js')
-      .catch(() => {
-
-        /*
-         * Si falla el Service Worker,
-         * el lector sigue funcionando normalmente.
-         */
-
-      });
-
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => { /* el lector sigue funcionando sin él */ });
   }
 
 </script>

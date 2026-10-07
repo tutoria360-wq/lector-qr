@@ -101,7 +101,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-10-02-cache-3h-facingmode-trasera
+  v2026-10-06-sin-falso-duplicado
 </p>
 
 <script>
@@ -203,6 +203,13 @@
   // Pausa breve de decodificación tras leer un QR.
   const PAUSA_CAMARA_MS = 1000;
 
+  // Si el MISMO QR sigue frente a la cámara, se ignora en silencio (no pisa el
+  // resultado verde ni invalida la respuesta del servidor del primer escaneo).
+  // Solo cuenta como nuevo escaneo si el QR se apartó al menos este tiempo.
+  const IGNORAR_RELECTURA_MS = 5000;
+  let ultimoIdLeido = null;
+  let ultimaLecturaTs = 0;
+
   const MAX_CONCURRENCIA = 2;
   const colaEspera = [];
   let solicitudesActivas = 0;
@@ -213,11 +220,6 @@
   // ============================================================
   // CACHÉ LOCAL DE ALUMNOS (localStorage) — dura 3 horas
   // ============================================================
-  // Queda guardada en el celular con su hora de descarga: si cierras y abres
-  // el lector, NO vuelve a descargar hasta que pasen 3 horas.
-  // Solo se descarga con uso real (abrir, volver a la app, escanear) o al
-  // pulsar "Actualizar lista".
-
   const CLAVE_CACHE_ALUMNOS = 'academia_alumnos_cache_v1';
   const CADUCIDAD_CACHE_MS = 3 * 60 * 60 * 1000;   // 3 horas
   const ESPERA_TRAS_FALLO_MS = 60 * 1000;          // tras un fallo automático, esperar 1 min
@@ -648,12 +650,23 @@
     const idAlumno = (idAlumnoRaw || '').trim();
     if (!idAlumno) return;
 
+    // Relectura del MISMO QR que sigue frente a la cámara: se ignora en silencio.
+    // No pisa el resultado verde ni incrementa la secuencia (que invalidaría la
+    // respuesta real del servidor del primer escaneo).
+    const t = Date.now();
+    if (idAlumno === ultimoIdLeido && (t - ultimaLecturaTs) < IGNORAR_RELECTURA_MS) {
+      ultimaLecturaTs = t; // mientras siga visible, sigue ignorándose
+      return;
+    }
+    ultimoIdLeido = idAlumno;
+    ultimaLecturaTs = t;
+
     refrescarCacheSiCaduco_(); // uso real: solo descarga si ya pasaron 3 horas
 
     const miSecuencia = ++secuenciaEscaneo;
     const alumnoLocalParaNombre = buscarAlumnoEnCache(idAlumno);
 
-    // Duplicado por cooldown: aviso inmediato.
+    // Duplicado real: el alumno volvió a escanear tras apartar el QR.
     const ahora = Date.now();
     if (ahora - (alumnosRecientes.get(idAlumno) || 0) < COOLDOWN_DUPLICADO_MS) {
       mostrarDuplicadoInmediato_('Ya tiene un movimiento registrado hace unos segundos.', alumnoLocalParaNombre, miSecuencia);
@@ -672,7 +685,7 @@
     }
 
     // Validación local primero: confirmación instantánea sin depender de la red.
-    const alumnoLocal = buscarAlumnoEnCache(idAlumno);
+    const alumnoLocal = alumnoLocalParaNombre;
 
     if (alumnoLocal) {
 

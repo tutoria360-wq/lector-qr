@@ -65,7 +65,6 @@
   .toggle button.btn-cerrar { flex: 0 0 auto; padding: 12px 14px; font-size: 14px; color: #94a3b8; }
   .toggle button.btn-cerrar:hover { background: #334155; color: #fecaca; border-color: #7f1d1d; }
 
-  /* Bloque "Actualizar lista" */
   .cache-bloque { max-width: 420px; margin: 14px auto 0; text-align: center; }
   .cache-bloque button { background: #1e293b; border: 1px solid #334155; font-size: 13px; padding: 8px 14px; }
   .cache-bloque button:hover { background: #334155; }
@@ -101,7 +100,7 @@
 </div>
 
 <p style="text-align:center; font-size:10px; color:#475569; margin-top:14px; font-family:monospace;">
-  v2026-10-06-sin-falso-duplicado
+  v2026-10-21-reintentos-seguros
 </p>
 
 <script>
@@ -129,7 +128,6 @@
   let modoActual = 'Entrada';
 
   // Cámara: se apaga sola con la pantalla oculta y se reactiva al volver.
-  let camaraDeviceId = null;
   let camaraActiva = false;
   let pausadoPorCooldown = false;
 
@@ -138,6 +136,9 @@
     qrbox: { width: 250, height: 250 },
     disableFlip: true
   };
+
+  // Errores temporales del servidor que conviene reintentar (candado ocupado, etc.).
+  const REGEX_ERROR_TEMPORAL = /ocupado|tiempo de espera|bloqueo|lock/i;
 
   function detenerCamara_() {
     if (!scannerRef || !camaraActiva) return;
@@ -205,7 +206,6 @@
 
   // Si el MISMO QR sigue frente a la cámara, se ignora en silencio (no pisa el
   // resultado verde ni invalida la respuesta del servidor del primer escaneo).
-  // Solo cuenta como nuevo escaneo si el QR se apartó al menos este tiempo.
   const IGNORAR_RELECTURA_MS = 5000;
   let ultimoIdLeido = null;
   let ultimaLecturaTs = 0;
@@ -262,11 +262,11 @@
   function buscarAlumnoEnCache(idBuscado) {
     if (!cacheAlumnos) return null;
     const buscado = String(idBuscado).trim();
-    let pos = Object.prototype.hasOwnProperty.call(cacheAlumnos.porId, buscado)
+    const tiene = Object.prototype.hasOwnProperty;
+    const pos = tiene.call(cacheAlumnos.porId, buscado)
       ? cacheAlumnos.porId[buscado]
-      : (Object.prototype.hasOwnProperty.call(cacheAlumnos.porDni, buscado) ? cacheAlumnos.porDni[buscado] : undefined);
-    if (pos === undefined) return null;
-    return cacheAlumnos.alumnos[pos];
+      : (tiene.call(cacheAlumnos.porDni, buscado) ? cacheAlumnos.porDni[buscado] : undefined);
+    return pos === undefined ? null : cacheAlumnos.alumnos[pos];
   }
 
   function parseFechaDDMMYYYY_(str) {
@@ -299,10 +299,7 @@
     refrescarCacheAlumnos();
   }
 
-  /**
-   * Descarga la lista del servidor y actualiza la caché.
-   * Devuelve una promesa que resuelve true (ok) o false (falló).
-   */
+  /** Descarga la lista del servidor y actualiza la caché. Resuelve true (ok) o false (falló). */
   function refrescarCacheAlumnos() {
     if (!URL_ENVIO || URL_ENVIO.indexOf('PEGA-AQUI') > -1) return Promise.resolve(false);
     refrescandoCache = true;
@@ -421,6 +418,14 @@
     return leerColaPendiente_().some(function (item) { return item.idAlumno === idAlumno; });
   }
 
+  function urlMarcar_(idAlumno, tipoMovimiento, requestId) {
+    return URL_ENVIO +
+      '?accion=marcarAsistencia' +
+      '&idAlumno=' + encodeURIComponent(idAlumno) +
+      '&tipoMovimiento=' + encodeURIComponent(tipoMovimiento) +
+      '&requestId=' + encodeURIComponent(requestId);
+  }
+
   function procesarColaPendientePersistente() {
     if (!navigator.onLine) return; // sin red no se gasta nada
 
@@ -433,21 +438,19 @@
     const item = pendientesDeIntentar[0];
     item.intentos = (item.intentos || 0) + 1;
 
-    const url =
-      URL_ENVIO +
-      '?accion=marcarAsistencia' +
-      '&idAlumno=' + encodeURIComponent(item.idAlumno) +
-      '&tipoMovimiento=' + encodeURIComponent(item.tipoMovimiento) +
-      '&requestId=' + encodeURIComponent(item.requestId);
-
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-    fetch(url, { signal: controller.signal })
+    fetch(urlMarcar_(item.idAlumno, item.tipoMovimiento, item.requestId), { signal: controller.signal })
       .then(r => { clearTimeout(timeoutId); if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(data => {
+        // Solo sale de la cola si el servidor lo guardó o lo rechazó por una regla de negocio.
+        // Cualquier otro fallo (candado ocupado, error del servidor) se reintenta.
+        if (!data.success && !esRechazoDeNegocio_(data)) {
+          throw new Error(data.message || 'error del servidor');
+        }
         quitarDeColaPendiente_(item.requestId);
-        if (!data.success && esRechazoDeNegocio_(data)) {
+        if (!data.success) {
           mostrarAlertaCorreccion_(item.nombreAlumno || item.idAlumno, data.message);
         }
       })
@@ -651,8 +654,6 @@
     if (!idAlumno) return;
 
     // Relectura del MISMO QR que sigue frente a la cámara: se ignora en silencio.
-    // No pisa el resultado verde ni incrementa la secuencia (que invalidaría la
-    // respuesta real del servidor del primer escaneo).
     const t = Date.now();
     if (idAlumno === ultimoIdLeido && (t - ultimaLecturaTs) < IGNORAR_RELECTURA_MS) {
       ultimaLecturaTs = t; // mientras siga visible, sigue ignorándose
@@ -661,21 +662,21 @@
     ultimoIdLeido = idAlumno;
     ultimaLecturaTs = t;
 
-    refrescarCacheSiCaduco_(); // uso real: solo descarga si ya pasaron 3 horas
+    refrescarCacheSiCaduco_(); // solo descarga si ya pasaron 3 horas
 
     const miSecuencia = ++secuenciaEscaneo;
-    const alumnoLocalParaNombre = buscarAlumnoEnCache(idAlumno);
+    const alumnoLocal = buscarAlumnoEnCache(idAlumno);
 
     // Duplicado real: el alumno volvió a escanear tras apartar el QR.
     const ahora = Date.now();
     if (ahora - (alumnosRecientes.get(idAlumno) || 0) < COOLDOWN_DUPLICADO_MS) {
-      mostrarDuplicadoInmediato_('Ya tiene un movimiento registrado hace unos segundos.', alumnoLocalParaNombre, miSecuencia);
+      mostrarDuplicadoInmediato_('Ya tiene un movimiento registrado hace unos segundos.', alumnoLocal, miSecuencia);
       return;
     }
 
     // Ya hay un intento en curso o en la cola persistente.
     if (alumnoTieneAlgoPendiente(idAlumno)) {
-      mostrarDuplicadoInmediato_('Ya se está procesando, espera un momento.', alumnoLocalParaNombre, miSecuencia);
+      mostrarDuplicadoInmediato_('Ya se está procesando, espera un momento.', alumnoLocal, miSecuencia);
       return;
     }
 
@@ -685,8 +686,6 @@
     }
 
     // Validación local primero: confirmación instantánea sin depender de la red.
-    const alumnoLocal = alumnoLocalParaNombre;
-
     if (alumnoLocal) {
 
       if (alumnoLocal.Estado_Matricula === 'Retirado') {
@@ -702,8 +701,6 @@
       }
 
       const requestId = idAlumno + '_' + ahora + '_' + Math.random().toString(36).slice(2, 8);
-      enProceso.set(idAlumno, { requestId: requestId, intentos: 0 });
-      actualizarContadorPendientes();
 
       mostrarResultado(
         true,
@@ -716,8 +713,6 @@
 
       enviarRegistroEnSegundoPlano_(idAlumno, modoActual, requestId, alumnoLocal.Nombre_Completo);
       alumnosRecientes.set(idAlumno, ahora);
-      enProceso.delete(idAlumno);
-      actualizarContadorPendientes();
       return;
     }
 
@@ -731,35 +726,34 @@
     procesarCola();
   }
 
+  /**
+   * Envío en segundo plano (alumno ya validado en local). Si el servidor responde con un
+   * error temporal o no hay red, reintenta y, si sigue fallando, lo guarda en la cola
+   * persistente para no perder el registro.
+   */
   function enviarRegistroEnSegundoPlano_(idAlumno, tipoMovimiento, requestId, nombreAlumno, intentoActual) {
     intentoActual = (intentoActual || 0) + 1;
-
-    const url =
-      URL_ENVIO +
-      '?accion=marcarAsistencia' +
-      '&idAlumno=' + encodeURIComponent(idAlumno) +
-      '&tipoMovimiento=' + encodeURIComponent(tipoMovimiento) +
-      '&requestId=' + encodeURIComponent(requestId);
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
-    fetch(url, { signal: controller.signal })
+    fetch(urlMarcar_(idAlumno, tipoMovimiento, requestId), { signal: controller.signal })
       .then(response => {
         clearTimeout(timeoutId);
         if (!response.ok) throw new Error('HTTP ' + response.status);
         return response.json();
       })
       .then(data => {
-        const esErrorDeCandado = !data.success && data.message && /tiempo de espera|bloqueo/i.test(data.message);
+        if (data.success) return;
 
-        if (esErrorDeCandado && intentoActual < MAX_INTENTOS) {
-          return enviarRegistroEnSegundoPlano_(idAlumno, tipoMovimiento, requestId, nombreAlumno, intentoActual);
-        }
-
-        if (!data.success && esRechazoDeNegocio_(data)) {
+        // Rechazo de negocio (vencido, retirado...): se avisa y no se reintenta.
+        if (esRechazoDeNegocio_(data)) {
           mostrarAlertaCorreccion_(nombreAlumno || idAlumno, data.message);
+          return;
         }
+
+        // Error temporal o del servidor: va al catch para reintentar / guardar en cola.
+        throw new Error(data.message || 'error del servidor');
       })
       .catch(err => {
         clearTimeout(timeoutId);
@@ -804,25 +798,18 @@
   }
 
   // ============================================================
-  // ENVÍO CON REINTENTOS CLASIFICADOS
+  // ENVÍO CON REINTENTOS (alumno no encontrado en la caché local)
   // ============================================================
   function ejecutarConReintentos(idAlumno, entrada) {
 
     entrada.intentos++;
     actualizarEstadoSiVigente_('Enviando ' + modoActual + '…', entrada.seq);
 
-    const url =
-      URL_ENVIO +
-      '?accion=marcarAsistencia' +
-      '&idAlumno=' + encodeURIComponent(idAlumno) +
-      '&tipoMovimiento=' + encodeURIComponent(modoActual) +
-      '&requestId=' + encodeURIComponent(entrada.requestId);
-
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), TIMEOUT_MS);
     const tEnvioFetch = Date.now();
 
-    return fetch(url, { signal: controller.signal })
+    return fetch(urlMarcar_(idAlumno, modoActual, entrada.requestId), { signal: controller.signal })
 
       .then(response => {
         clearTimeout(timeoutId);
@@ -831,9 +818,10 @@
       })
 
       .then(data => {
-        const esErrorDeCandado = !data.success && data.message && /tiempo de espera|bloqueo/i.test(data.message);
+        const esErrorTemporal = !data.success &&
+          (data.tipoError === 'ocupado' || (data.message && REGEX_ERROR_TEMPORAL.test(data.message)));
 
-        if (esErrorDeCandado && entrada.intentos < MAX_INTENTOS) {
+        if (esErrorTemporal && entrada.intentos < MAX_INTENTOS) {
           actualizarEstadoSiVigente_('Reintentando ' + idAlumno + '…', entrada.seq);
           return ejecutarConReintentos(idAlumno, entrada);
         }
@@ -904,10 +892,6 @@
           estadoDiv.innerHTML = '<div class="resultado error">No se detectó ninguna cámara conectada.</div>';
           return;
         }
-
-        const trasera = camaras.find(c => /back|trasera|rear|environment/i.test(c.label || ''));
-        const elegida = trasera || camaras[0];
-        camaraDeviceId = elegida.id;
 
         // Solo códigos QR: no prueba otros formatos de barras (menos CPU).
         const scanner = new Html5Qrcode('qr-reader', {
